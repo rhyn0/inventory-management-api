@@ -14,7 +14,8 @@
     ],
     "python.testing.pytestEnabled": true,
     "python.testing.pytestArgs": [
-        "--capture=tee-sys"
+        "--capture=tee-sys",
+        "tests"
     ],
     "python.testing.unittestEnabled": false
 }
