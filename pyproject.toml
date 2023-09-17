@@ -1,0 +1,154 @@
+[tool.poetry]
+name = "inventory-management-api"
+version = "0.1.0"
+description = "Inventory Tracking API project"
+authors = ["Ryan Ozawa <ryan.ozawa21@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.103.1"
+SQLAlchemy = { version = "^2.0.20", extras = ["asyncio"] }
+asyncpg = "^0.28.0"
+python-dotenv = "^1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^3.4.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = "^7.4.2"
+requests = "^2.31.0"
+hypothesis = "^6.86.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.ruff]
+# Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.
+select = [
+    "E",
+    "F",
+    "W",   # pycodestyle warnings
+    "C90", # Mccabe complexity
+    "N",   # pep8-naming
+    "D",   # pydocstyle
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "A",   # flake8-builtins
+    "C4",  # flake8-comprehensions
+    "G",   # flake8-logging
+    "PIE", # flake8-pie
+    "PT",  # flake8-pytest-style
+    "RET", # flake8-return
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "PD",  # pandas vet
+    "TRY", # tryceratops,
+    "PLR", # pylint: refactor
+    "RUF",
+]
+ignore = []
+
+# Allow autofix for listed rules.
+fix = true
+show-fixes = true
+fixable = [
+    "A",
+    "ANN",
+    "ARG",
+    "B",
+    "BLE",
+    "COM",
+    "D",
+    "DTZ",
+    "E",
+    "EM",
+    "ERA",
+    "EXE",
+    "F",
+    "FBT",
+    "G",
+    "ICN",
+    "INP",
+    "ISC",
+    "N",
+    "PD",
+    "PGH",
+    "PIE",
+    "PL",
+    "PT",
+    "PTH",
+    "Q",
+    "RET",
+    "RUF",
+    "S",
+    "SIM",
+    "TCH",
+    "TID",
+    "TRY",
+    "UP",
+    "W",
+    "YTT",
+]
+unfixable = []
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "tests",          # don't want Ruff going crazy because the tests aren't perfectly commented
+]
+
+# Same as Black.
+line-length = 88
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+# Assume Python 3.10.
+target-version = "py311"
+
+# Error output type
+format = "text"
+
+[tool.ruff.mccabe]
+# Unlike Flake8, default to a complexity level of 10.
+max-complexity = 10
+
+[tool.ruff.per-file-ignores]
+
+[tool.ruff.pydocstyle]
+convention = "google"
+
+[tool.isort]
+force_sort_within_sections = true
+force_single_line = true
+known_first_party = ["inven_api", "common"]
+# this new option doesn't work quite yet
+# import_headings = { "STDLIB" = "Standard Library Ruff", "THIRDPARTY" = "External Party", "FIRSTPARTY" = "My Modules" }
+import_heading_stdlib = "Standard Library"
+import_heading_thirdparty = "External Party"
+import_heading_firstparty = "Local Modules"
+profile = "black"
+group_by_package = true

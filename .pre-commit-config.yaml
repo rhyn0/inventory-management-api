@@ -1,0 +1,49 @@
+# Apply to all files without commiting:
+#   pre-commit run --all-files
+# Update this file:
+#   pre-commit autoupdate
+fail_fast: true
+exclude: ^.vscode/$
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-case-conflict
+      - id: check-docstring-first
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: debug-statements
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: name-tests-test
+        args: ["--pytest-test-first"]
+      - id: no-commit-to-branch # protect main
+      - id: trailing-whitespace
+  - repo: https://github.com/psf/black
+    rev: 23.9.1
+    hooks:
+      - id: black
+        language_version: python3
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        name: isort
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.0.290
+    hooks:
+      - id: ruff
+        exclude: "^.*test(s)?/"
+  - repo: https://github.com/pycqa/flake8
+    rev: "6.1.0"
+    hooks:
+      - id: flake8
+        name: flake8-testing
+        additional_dependencies:
+          - "flake8-pytest-style"
+        files: "tests"
+        args:
+          - "--select=PT"
