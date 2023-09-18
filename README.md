@@ -71,3 +71,22 @@ poetry run uvicorn main:app
 ```bash
 docker-compose up --build
 ```
+
+
+## Development
+
+### Start PostgreSQL container
+
+Instead of using *latest* which at this time is 16, going to use 15.4 for this project.
+
+Start the Postgres container for dev with:
+
+`docker run --name postgres-dev -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:15.4`
+
+### Connect to Postgres via psql
+
+Then once the container is started, we can use `psql` for any later debugging to test our code executions.
+
+We need to specify localhost in this case, otherwise `psql` will try to use the default machine socket that isn't present due to the container running.
+
+`psql -h localhost -U postgres -W`

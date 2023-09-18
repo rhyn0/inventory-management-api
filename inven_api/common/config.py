@@ -188,11 +188,9 @@ class EnvConfig:
             raise TypeError(type(file_path))
 
         if isinstance(file_path, str):
-            # Empty string is converted to relative cwd
-            if not file_path:
-                raise FileNotFoundError(file_path)
             file_path = Path(file_path)
-        if not file_path.exists():
+        # Empty string is converted to relative cwd
+        if not file_path.exists() or not file_path.is_file():
             raise FileNotFoundError(file_path)
 
         dotenv_dict = dotenv.dotenv_values(file_path)
