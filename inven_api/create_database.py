@@ -4,12 +4,12 @@ import argparse
 import asyncio
 
 # External Party
-from database import Base
-from database import Build
 from database import BuildParts
-from database import Product
+from database import Builds
+from database import InventoryBase
+from database import Products
 from database import ProductTypes
-from database import Tool
+from database import Tools
 from database import get_engine
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -20,21 +20,21 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from common import DbConfig
 
 BIRDHOUSE_PRODUCTS = {
-    "dowel": Product(
+    "dowel": Products(
         name="3/8 in. x 36 in. Pine Square Dowel",
         vendor="BuildersChoice",
         product_type=ProductTypes.MATERIAL,
         vendor_sku="#BC_PSD36",  # just acronym of name with length
         quantity=2,
     ),
-    "wood": Product(
+    "wood": Products(
         name="2 in. x 6 in. x 16 ft Doug Fir Lumber",
         vendor="Idaho Forest Group",
         product_type=ProductTypes.MATERIAL,
         vendor_sku="#IFG_DFL2_6_16",
         quantity=1,
     ),
-    "nail": Product(
+    "nail": Products(
         name="3 in. Brite Fluted Masonry Nail",
         vendor="PRO-FIT",
         product_type=ProductTypes.PART,
@@ -43,7 +43,7 @@ BIRDHOUSE_PRODUCTS = {
     ),
 }
 
-BIRDHOUSE_BUILD = Build(
+BIRDHOUSE_BUILD = Builds(
     name="Birdhouse",
     sku="IMA_BH_S",  # inventory management api birdhouse small
 )
@@ -56,7 +56,7 @@ async def create_schema(engine: AsyncEngine):
     """
     async with engine.begin() as conn:
         await conn.execute(
-            sa.schema.CreateSchema(Base.metadata.schema, if_not_exists=True)
+            sa.schema.CreateSchema(InventoryBase.metadata.schema, if_not_exists=True)
         )
 
 
@@ -67,7 +67,7 @@ async def create_tables(engine: AsyncEngine):
         engine (AsyncEngine): asynchronous driver engine to Postgres
     """
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(InventoryBase.metadata.create_all)
 
 
 async def insert_starter_data(session_maker: async_sessionmaker[AsyncSession]):
@@ -84,19 +84,19 @@ async def insert_starter_data(session_maker: async_sessionmaker[AsyncSession]):
         session.add_all(
             [
                 *BIRDHOUSE_PRODUCTS.values(),
-                Tool(
+                Tools(
                     name="Compact Auto Lock Tape Measure 9ft",
                     vendor="Milwaukee",
                     total_owned=5,
                     total_avail=5,
                 ),
-                Tool(
+                Tools(
                     name="13 Amp Corded 7-1/4 in. Circular Saw",
                     vendor="Ryobi",
                     total_owned=2,
                     total_avail=1,
                 ),
-                Tool(
+                Tools(
                     name="10 oz. Hammer with 9-3/4 in. Wood Handle",
                     vendor="Stanley",
                     total_owned=10,  # who doesn't have a lot of hammers
@@ -115,8 +115,8 @@ async def insert_dependent_data(session_maker: async_sessionmaker[AsyncSession])
         session_maker (async_sessionmaker[AsyncSession]): connection maker to Postgres
     """
     async with session_maker() as session, session.begin():
-        prod_result = await session.execute(sa.select(Product.product_id))
-        bom_result = await session.execute(sa.select(Build.bom_id))
+        prod_result = await session.execute(sa.select(Products.product_id))
+        bom_result = await session.execute(sa.select(Builds.build_id))
 
         bom_id = bom_result.scalar_one()
 
@@ -124,7 +124,7 @@ async def insert_dependent_data(session_maker: async_sessionmaker[AsyncSession])
             [
                 BuildParts(
                     product_id=pid,
-                    bom_id=bom_id,
+                    build_id=bom_id,
                     quantity_required=10,
                 )
                 for pid in prod_result.scalars()

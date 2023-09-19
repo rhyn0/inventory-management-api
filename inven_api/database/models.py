@@ -2,7 +2,6 @@
 # Standard Library
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
 
 # External Party
 from sqlalchemy import func
@@ -15,8 +14,6 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 
-bigint = Annotated[int, "bigint"]
-
 
 class ProductTypes(StrEnum):
     """Enumerate all possible Product Types."""
@@ -25,14 +22,15 @@ class ProductTypes(StrEnum):
     MATERIAL = "material"  # e.g. lumber
 
 
-class Base(DeclarativeBase):
+# TODO: include some better __repr__
+class InventoryBase(DeclarativeBase):
     """Base that all tables inherit from, links sa.MetaData together."""
 
     # prefer to not use public schema
     metadata = sa.MetaData(schema="inventory")
 
 
-class Product(Base):
+class Products(InventoryBase):
     """Model of table that contains records of Product information."""
 
     __tablename__ = "products"
@@ -43,15 +41,14 @@ class Product(Base):
     vendor: Mapped[str] = mapped_column(TEXT)
     product_type: Mapped[ProductTypes] = mapped_column(VARCHAR(100))
     vendor_sku: Mapped[str] = mapped_column(VARCHAR(255))
-    quantity: Mapped[bigint] = mapped_column(
-        BIGINT, sa.CheckConstraint("quantity >= 0")
-    )
+    quantity: Mapped[int] = mapped_column(BIGINT, sa.CheckConstraint("quantity >= 0"))
     modified_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, server_default=func.now(), onupdate=func.now()
     )
 
 
-class Tool(Base):
+# SQLAlchemy Tables should be plural
+class Tools(InventoryBase):
     """Model of table that contains the company's available tools."""
 
     __tablename__ = "tools"
@@ -74,26 +71,41 @@ class Tool(Base):
     )
 
 
-class Build(Base):
+class Builds(InventoryBase):
     """Model of table containing all builds with their unique details."""
 
-    __tablename__ = "boms"
+    __tablename__ = "builds"
 
-    bom_id: Mapped[int] = mapped_column("id", primary_key=True)
+    build_id: Mapped[int] = mapped_column("id", primary_key=True)
     name: Mapped[str] = mapped_column(TEXT)
-    sku: Mapped[str] = mapped_column(TEXT)
+    sku: Mapped[str] = mapped_column(TEXT, unique=True)
 
 
-class BuildParts(Base):
+class BuildParts(InventoryBase):
     """Model of intersection between Build and Product.
 
     Contains the products necessary to complete a build.
     """
 
-    __tablename__ = "build_list"
+    __tablename__ = "build_parts"
 
-    __table_args__ = (sa.PrimaryKeyConstraint("product_id", "bom_id"),)
+    __table_args__ = (sa.PrimaryKeyConstraint("product_id", "build_id"),)
 
-    product_id: Mapped[int] = mapped_column(sa.ForeignKey(Product.product_id))
-    bom_id: Mapped[int] = mapped_column(sa.ForeignKey(Build.bom_id))
+    product_id: Mapped[int] = mapped_column(sa.ForeignKey(Products.product_id))
+    build_id: Mapped[int] = mapped_column(sa.ForeignKey(Builds.build_id))
+    quantity_required: Mapped[int]
+
+
+class BuildTools(InventoryBase):
+    """Model of intersection between Build and Tools.
+
+    Contains the set of tools necessary to complete a build.
+    """
+
+    __tablename__ = "build_tools"
+
+    __table_args__ = (sa.PrimaryKeyConstraint("tool_id", "build_id"),)
+
+    tool_id: Mapped[int] = mapped_column(sa.ForeignKey(Tools.tool_id))
+    build_id: Mapped[int] = mapped_column(sa.ForeignKey(Builds.build_id))
     quantity_required: Mapped[int]

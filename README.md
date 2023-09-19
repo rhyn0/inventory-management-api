@@ -63,7 +63,7 @@ Since this does rely on PostgreSQL, it is better to run it as-is using [Docker C
 ```bash
 # edit DB connection string
 vim ./inven_api/common/.env.db
-poetry run uvicorn main:app
+poetry run uvicorn main:APP
 ```
 
 ### From a Docker Container
@@ -90,3 +90,11 @@ Then once the container is started, we can use `psql` for any later debugging to
 We need to specify localhost in this case, otherwise `psql` will try to use the default machine socket that isn't present due to the container running.
 
 `psql -h localhost -U postgres -W`
+
+### Initialize the Database Tables
+
+It is better to call the **SQLAlchemy** `Base.metadata.create_all` from a seperate script and not tie it to the server start up. I think it makes more sense to have a seperate script to do that.
+
+```bash
+python3 create_database.py
+```

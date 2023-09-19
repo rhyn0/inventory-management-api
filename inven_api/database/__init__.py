@@ -1,18 +1,20 @@
 """Module for database specifics."""
 from .connection import get_engine
-from .models import Base
-from .models import Build
 from .models import BuildParts
-from .models import Product
+from .models import Builds
+from .models import InventoryBase
+from .models import Products
 from .models import ProductTypes
-from .models import Tool
+from .models import Tools
+from .session import DbSession
 
 _all = [
     get_engine,
-    Base,
-    Product,
-    Tool,
+    InventoryBase,
+    Products,
+    Tools,
     ProductTypes,
-    Build,
+    Builds,
     BuildParts,
+    DbSession,
 ]
