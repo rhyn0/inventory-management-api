@@ -51,7 +51,7 @@ select = [
     "PLR", # pylint: refactor
     "RUF",
 ]
-ignore = []
+ignore = ["D100"]
 
 # Allow autofix for listed rules.
 fix = true
