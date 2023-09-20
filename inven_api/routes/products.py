@@ -139,7 +139,19 @@ async def read_product_by_id(
     return result  # type: ignore
 
 
-@ROUTER.post("", response_model=ProductFull)
+@ROUTER.post("")
 async def insert_new_product(new_prod: Annotated[ProductCreate, Body()]) -> ProductFull:
     """Take in data for a singular new product and add to database."""
+    ...
+
+
+@ROUTER.delete(path="/{prod_id}")
+async def remove_product(prod_id: int) -> ProductFull:
+    """Remove product from database."""
+    ...
+
+
+@ROUTER.patch(path="/{prod_id}")
+async def update_product(prod_id: int, updated_prod: ProductUpdate) -> ProductFull:
+    """Update the quantity in stock of a product."""
     ...
