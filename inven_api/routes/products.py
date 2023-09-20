@@ -12,8 +12,11 @@ from database import ProductTypes
 from dependencies import DatabaseDep
 from dependencies import PaginationDep
 from fastapi import APIRouter
+from fastapi import Body
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Query
+from fastapi import status
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -96,7 +99,7 @@ class ProductFull(ProductCreate):
     product_id: int
 
 
-@ROUTER.get("/", response_model=list[ProductFull])
+@ROUTER.get("", response_model=list[ProductFull])
 async def read_products(
     session: DatabaseDep,
     pagination: PaginationDep,
@@ -113,20 +116,30 @@ async def read_products(
     # sclars expands result columns into the tuple
     # otherwise will receive a tuple containing the Products object
     result = await session.scalars(statement)
+    # this is fine even if it returns 0
     return result.all()
 
 
-# TODO: fix scalars
 @ROUTER.get("/{prod_id}")
 async def read_product_by_id(
     prod_id: int,
     session: DatabaseDep,
-    product_spec: ProductDep,
 ) -> ProductFull:
     """Return a Product present in database.
 
     Does not use pagination dependency as up to one result only.
     """
-    statement = _apply_spec_statement(select(Products), specs=product_spec)
-    result = await session.execute(statement)
-    return result.one_or_none()  # type: ignore
+    result = (
+        await session.scalars(select(Products).where(Products.product_id == prod_id))
+    ).one_or_none()
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Product not Found"
+        )
+    return result  # type: ignore
+
+
+@ROUTER.post("", response_model=ProductFull)
+async def insert_new_product(new_prod: Annotated[ProductCreate, Body()]) -> ProductFull:
+    """Take in data for a singular new product and add to database."""
+    ...

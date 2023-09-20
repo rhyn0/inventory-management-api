@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import VARCHAR
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm.exc import DetachedInstanceError
 
 
 class ProductTypes(StrEnum):
@@ -22,12 +23,37 @@ class ProductTypes(StrEnum):
     MATERIAL = "material"  # e.g. lumber
 
 
-# TODO: include some better __repr__
 class InventoryBase(DeclarativeBase):
     """Base that all tables inherit from, links sa.MetaData together."""
 
     # prefer to not use public schema
     metadata = sa.MetaData(schema="inventory")
+
+    def __repr__(self) -> str:
+        """Override repr for better debugging."""
+        return self._repr()
+
+    def _repr(self, **kwargs) -> str:
+        """Helper for __repr__.
+
+        Args:
+            **kwargs: columns to include in repr
+
+        Return:
+            str
+        """
+        field_strings = []
+        at_least_one_attached_attribute = False
+        for key, field in kwargs.items():
+            try:
+                field_strings.append(f"{key}={field!r}")
+            except DetachedInstanceError:
+                field_strings.append(f"{key}=DetachedInstanceError")
+            else:
+                at_least_one_attached_attribute = True
+        if at_least_one_attached_attribute:
+            return f"<{self.__class__.__name__}({','.join(field_strings)})>"
+        return f"<{self.__class__.__name__} {id(self)}>"
 
 
 class Products(InventoryBase):
@@ -45,6 +71,11 @@ class Products(InventoryBase):
     modified_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, server_default=func.now(), onupdate=func.now()
     )
+
+    def __repr__(self) -> str:  # noqa: D105
+        return self._repr(
+            id=self.product_id, name=self.name, vendor_sku=self.vendor_sku
+        )
 
 
 # SQLAlchemy Tables should be plural
@@ -70,6 +101,14 @@ class Tools(InventoryBase):
         default=0,
     )
 
+    def __repr__(self) -> str:  # noqa: D105
+        return self._repr(
+            id=self.tool_id,
+            name=self.name,
+            total_owned=self.total_owned,
+            avail=self.total_avail,
+        )
+
 
 class Builds(InventoryBase):
     """Model of table containing all builds with their unique details."""
@@ -79,6 +118,9 @@ class Builds(InventoryBase):
     build_id: Mapped[int] = mapped_column("id", primary_key=True)
     name: Mapped[str] = mapped_column(TEXT)
     sku: Mapped[str] = mapped_column(TEXT, unique=True)
+
+    def __repr__(self) -> str:  # noqa: D105
+        return self._repr(id=self.build_id, name=self.name, sku=self.sku)
 
 
 class BuildParts(InventoryBase):
@@ -95,6 +137,13 @@ class BuildParts(InventoryBase):
     build_id: Mapped[int] = mapped_column(sa.ForeignKey(Builds.build_id))
     quantity_required: Mapped[int]
 
+    def __repr__(self) -> str:  # noqa: D105
+        return self._repr(
+            product_id=self.product_id,
+            build_id=self.build_id,
+            quantity_req=self.quantity_required,
+        )
+
 
 class BuildTools(InventoryBase):
     """Model of intersection between Build and Tools.
@@ -109,3 +158,8 @@ class BuildTools(InventoryBase):
     tool_id: Mapped[int] = mapped_column(sa.ForeignKey(Tools.tool_id))
     build_id: Mapped[int] = mapped_column(sa.ForeignKey(Builds.build_id))
     quantity_required: Mapped[int]
+
+    def __repr__(self) -> str:  # noqa: D105
+        return self._repr(
+            id=self.tool_id, build_id=self.build_id, quantity_req=self.quantity_required
+        )
