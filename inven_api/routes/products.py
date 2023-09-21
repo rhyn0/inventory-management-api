@@ -18,7 +18,11 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
 from pydantic import BaseModel
+from sqlalchemy import delete
+from sqlalchemy import exc as sa_exc
+from sqlalchemy import insert
 from sqlalchemy import select
+from sqlalchemy import update
 
 ROUTER = APIRouter(prefix="/products", tags=["products"])
 
@@ -71,10 +75,11 @@ def _apply_spec_statement(sql, specs: dict[str, Any]):
 ProductDep = Annotated[dict[str, Any], Depends(product_query)]
 
 
-class ProductCreate(BaseModel):
+class ProductBase(BaseModel):
     """Define a Product to be parsed from an incoming HTTP request.
 
     Very similar to the Products in ../database/models.py.
+    This is a shared base of the common fields, should not be instantiated.
     """
 
     name: str
@@ -84,13 +89,20 @@ class ProductCreate(BaseModel):
     quantity: int
 
 
+class ProductCreate(ProductBase):
+    """Model to be parsed from a create request."""
+
+    # No extra columns to add
+    pass  # noqa: PIE790
+
+
 class ProductUpdate(BaseModel):
     """Define what fields can be updated on a Product."""
 
     quantity: int
 
 
-class ProductFull(ProductCreate):
+class ProductFull(ProductBase):
     """Define a Product for deserializing as response to HTTP request.
 
     Just adds 'id' field which is necessary for responses.
@@ -139,19 +151,77 @@ async def read_product_by_id(
     return result  # type: ignore
 
 
-@ROUTER.post("")
-async def insert_new_product(new_prod: Annotated[ProductCreate, Body()]) -> ProductFull:
+@ROUTER.post("", response_model=ProductFull)
+async def insert_new_product(
+    new_prod: Annotated[ProductCreate, Body()], session: DatabaseDep
+):
     """Take in data for a singular new product and add to database."""
-    ...
+    async with session.begin():
+        return await session.scalar(
+            insert(Products).values(new_prod.model_dump()).returning(Products)
+        )
 
 
-@ROUTER.delete(path="/{prod_id}")
-async def remove_product(prod_id: int) -> ProductFull:
-    """Remove product from database."""
-    ...
+@ROUTER.delete(path="/{prod_id}", response_model=ProductFull)
+async def remove_product(prod_id: int, session: DatabaseDep):
+    """Remove product from database.
+
+    This will return the deleted product
+    if there are no Builds relying upon this part.
+
+    If there is such a constraint still, respond with 405
+    """
+    try:
+        async with session.begin():
+            return await session.scalar(
+                delete(Products)
+                .where(Products.product_id == prod_id)
+                .returning(Products)
+            )
+    except sa_exc.IntegrityError:
+        # TODO: add logging
+        # This happens due to foreign key constraint
+        # from table build_parts (BuildParts)
+        raise HTTPException(
+            status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+            detail="Product is still part of an active build",
+        ) from None
 
 
-@ROUTER.patch(path="/{prod_id}")
-async def update_product(prod_id: int, updated_prod: ProductUpdate) -> ProductFull:
-    """Update the quantity in stock of a product."""
-    ...
+@ROUTER.put(path="/{prod_id}", response_model=ProductFull)
+async def update_product(
+    prod_id: int, updated_prod: ProductUpdate, session: DatabaseDep
+):
+    """Update the quantity in bulk for a product.
+
+    The thinking of this endpoint is that someone has just counted,
+    the available stock of a product and is setting the current amount.
+    """
+    async with session.begin():
+        return await session.scalar(
+            update(Products)
+            .where(Products.product_id == prod_id)
+            .values(quantity=updated_prod.quantity)
+            .returning(Products)
+        )
+
+
+@ROUTER.put(path="/{prod_id}/quantity", response_model=ProductFull)
+async def update_product_quantity_by_change(
+    prod_id: int, delta_quant: Annotated[int, Body()], session: DatabaseDep
+):
+    """Update the quantity in bulk for a product.
+
+    The thinking of this endpoint is that someone is taking out some items,
+    they don't know the total leftover after their action but they know
+    how many they took.
+
+    The body for this request is a JSON number
+    """
+    async with session.begin():
+        return await session.scalar(
+            update(Products)
+            .where(Products.product_id == prod_id)
+            .values(quantity=Products.quantity + delta_quant)
+            .returning(Products)
+        )
