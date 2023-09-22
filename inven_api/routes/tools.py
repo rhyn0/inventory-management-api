@@ -1,6 +1,10 @@
 # Standard Library
+from enum import StrEnum
+from operator import add
+from operator import sub
 from typing import Annotated
 from typing import Any
+from typing import Self
 
 # External Party
 from fastapi import APIRouter
@@ -9,6 +13,7 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
 from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy import delete
 from sqlalchemy import exc as sa_exc
 from sqlalchemy import select
@@ -18,7 +23,9 @@ from inven_api.database.models import Tools
 from inven_api.dependencies import DatabaseDep
 from inven_api.dependencies import PaginationDep
 
-ROUTER = APIRouter(prefix="/tools", tags=["tools"])
+# redirect slashes means that if a client
+# sends a request to /tools it is same as /tools/
+ROUTER = APIRouter(prefix="/tools", tags=["tools"], redirect_slashes=True)
 
 
 def tool_query(
@@ -82,13 +89,63 @@ class ToolCreate(ToolBase):
     pass  # noqa: PIE790
 
 
-class ToolUpdate(ToolBase):
-    """Define what fields can be updated on a Tool."""
+class ToolUpdatePaths(StrEnum):
+    """Enum of paths for updating a tool's quantity fields."""
 
-    owned: int | None = None
-    avail: int | None = None
-    # TODO: singular plus minus on the above
-    # like a checkin of a tool updating avail to be plus one
+    OWNED = ("owned", "total_owned")
+    AVAIL = ("available", "total_available")
+
+    def __new__(cls, value: str, column_name: str) -> Self:
+        """Override object creation to store the column name alongside the value."""
+        obj = str.__new__(cls, value)
+        obj._value_ = value
+        obj.column_name = column_name  # type: ignore
+        return obj
+
+
+class ToolUpdateAtomicOperations(StrEnum):
+    """Enum of atomic operations for updating a tool's quantity fields."""
+
+    INCREMENT = "increment"
+    DECREMENT = "decrement"
+
+
+class ToolAtomicUpdateOutBase(BaseModel):
+    """Define base object that can be returned from an atomic update operation."""
+
+    tool_id: int
+    total_owned: int | None
+    total_avail: int | None
+
+
+class ToolPreAtomicUpdate(ToolAtomicUpdateOutBase):
+    """Define object that can be returned from a get pre-atomic update operation."""
+
+    # serialization_alias only used by FastAPI when response_model_by_alias=True
+    total_owned: int | None = Field(serialization_alias="preTotalOwned")
+    total_avail: int | None = Field(serialization_alias="preTotalAvail")
+
+    class config:  # noqa: N801
+        """Define config for this Pydantic model."""
+
+        # response_model_by_alias=True makes it so that the serialization_alias
+        # is used when serializing the model to JSON
+        # https://pydantic-docs.helpmanual.io/usage/model_config/
+        response_model_by_alias = True
+
+
+class ToolPostAtomicUpdate(ToolAtomicUpdateOutBase):
+    """Define object that can be returned from a atomic update then get operation."""
+
+    total_owned: int | None = Field(serialization_alias="post_total_owned")
+    total_avail: int | None = Field(serialization_alias="post_total_avail")
+
+
+class ToolUpdate(ToolBase):
+    """Define an update set operation for a Tool."""
+
+    owned: int | None = Field(None, serialization_alias="total_owned")
+    avail: int | None = Field(None, serialization_alias="total_avail")
 
 
 class ToolFull(ToolBase):
@@ -155,14 +212,95 @@ async def remove_tool(tool_id: int, session: DatabaseDep):
         return result
 
 
-@ROUTER.put(path="/{tool_id}")
+@ROUTER.put(path="/{tool_id}", response_model=ToolFull)
 async def update_tool_quantity_set(
-    tool_id: int, db: DatabaseDep, update_data: ToolUpdate
-) -> ToolFull:
+    tool_id: int, session: DatabaseDep, update_data: ToolUpdate
+):
     """Update the quantity fields of a specific Tool.
 
     This is a set operation, not an increment. Based on provided body,
     this will set the field in database to given.
     """
-    # TODO: other idea - use query params for the value
+    async with session.begin():
+        result = (
+            await session.execute(
+                select(Tools).where(Tools.tool_id == tool_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tool {tool_id} not found",
+            )
+
+        # Update the fields that were provided
+        # exclude_unset=True will filter out the default None values
+        # by_alias=True will use the serialization_alias which is the exact column name
+        for field, value in update_data.model_dump(
+            exclude_unset=True, by_alias=True
+        ).items():
+            setattr(result, field, value)
+        # auto commit
+        return result
+
+
+@ROUTER.put(
+    path="/{tool_id}/{field}/{atomic_op}/get",
+    response_model_by_alias=True,
+    response_model=ToolPostAtomicUpdate,
+)
+async def update_tool_quantity_atomic_postget(
+    tool_id: int,
+    field: ToolUpdatePaths,
+    atomic_op: ToolUpdateAtomicOperations,
+    session: DatabaseDep,
+    value: Annotated[int, Query(gt=0)] = 1,
+):
+    """Update the quantity owned fields of a specific Tool by an amount.
+
+    Example:
+        curl -X PUT .../tools/1/owned/increment/get?value=5
+
+    This is an increment operation. Based on provided body,
+    this will increment the field in database by given. Then return the new value.
+    """
+    async with session.begin():
+        result = (
+            await session.execute(
+                select(Tools).where(Tools.tool_id == tool_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tool {tool_id} not found",
+            )
+        oper = add if atomic_op == ToolUpdateAtomicOperations.INCREMENT else sub
+        update_field = (
+            result.total_owned if field is ToolUpdatePaths.OWNED else result.total_avail
+        )
+        update_field = oper(update_field, value)
+        # auto commit
+        return result
+
+
+@ROUTER.put(path="/{tool_id}/{field}/get/{atomic_op}", response_model_by_alias=True)
+async def update_tool_quantity_atomic_preget(
+    tool_id: int,
+    field: ToolUpdatePaths,
+    atomic_op: ToolUpdateAtomicOperations,
+    session: DatabaseDep,
+    value: Annotated[int, Query(gt=0)] = 1,
+) -> ToolFull:
+    """Update the quantity owned fields of a specific Tool by an amount.
+
+    Example:
+        curl -X PUT ../tools/1/owned/get/increment?value=5
+
+    This is an increment operation. Based on provided body,
+    this will increment the field in database by given.
+    Will return the value prior to the update statement
+    """
     ...

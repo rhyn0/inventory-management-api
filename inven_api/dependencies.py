@@ -5,10 +5,12 @@ from typing import Annotated
 from typing import Any
 
 # External Party
-from database import DbSession
 from fastapi import Depends
 from fastapi import Query
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# Local Modules
+from inven_api.database import DbSession
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
