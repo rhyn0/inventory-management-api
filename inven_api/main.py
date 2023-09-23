@@ -1,7 +1,8 @@
 """File for starting the REST server."""
 # External Party
 from fastapi import FastAPI
-from routes import router
+
+from .routes import router
 
 APP = FastAPI()
 APP.include_router(router)

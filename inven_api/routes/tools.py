@@ -17,6 +17,7 @@ from pydantic import Field
 from sqlalchemy import delete
 from sqlalchemy import exc as sa_exc
 from sqlalchemy import select
+from sqlalchemy import update
 
 # Local Modules
 from inven_api.database.models import Tools
@@ -78,8 +79,8 @@ class ToolBase(BaseModel):
 
     name: str
     vendor: str
-    owned: int
-    avail: int
+    owned: int = Field(validation_alias="total_owned")
+    available: int = Field(validation_alias="total_avail")
 
 
 class ToolCreate(ToolBase):
@@ -137,8 +138,8 @@ class ToolPreAtomicUpdate(ToolAtomicUpdateOutBase):
 class ToolPostAtomicUpdate(ToolAtomicUpdateOutBase):
     """Define object that can be returned from a atomic update then get operation."""
 
-    total_owned: int | None = Field(serialization_alias="post_total_owned")
-    total_avail: int | None = Field(serialization_alias="post_total_avail")
+    total_owned: int | None = Field(serialization_alias="postTotalOwned")
+    total_avail: int | None = Field(serialization_alias="postTotalAvailable")
 
 
 class ToolUpdate(ToolBase):
@@ -262,8 +263,9 @@ async def update_tool_quantity_atomic_postget(
     Example:
         curl -X PUT .../tools/1/owned/increment/get?value=5
 
-    This is an increment operation. Based on provided body,
-    this will increment the field in database by given. Then return the new value.
+    This is an atomic update operation. Based on provided request path,
+    this will increment/decrement the field in database by given value.
+    Then return the new value.
     """
     async with session.begin():
         result = (
@@ -286,21 +288,47 @@ async def update_tool_quantity_atomic_postget(
         return result
 
 
-@ROUTER.put(path="/{tool_id}/{field}/get/{atomic_op}", response_model_by_alias=True)
+@ROUTER.put(
+    path="/{tool_id}/{field}/get/{atomic_op}",
+    response_model_by_alias=True,
+    response_model=ToolPreAtomicUpdate,
+)
 async def update_tool_quantity_atomic_preget(
     tool_id: int,
     field: ToolUpdatePaths,
     atomic_op: ToolUpdateAtomicOperations,
     session: DatabaseDep,
     value: Annotated[int, Query(gt=0)] = 1,
-) -> ToolFull:
+):
     """Update the quantity owned fields of a specific Tool by an amount.
 
     Example:
         curl -X PUT ../tools/1/owned/get/increment?value=5
 
-    This is an increment operation. Based on provided body,
-    this will increment the field in database by given.
-    Will return the value prior to the update statement
+    This is an atomic update operation. Based on provided request path,
+    this will increment/decrement the field in database by given value.
+    Then return the value prior to the execution.
     """
-    ...
+    async with session.begin():
+        result = (
+            await session.execute(
+                select(Tools).where(Tools.tool_id == tool_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tool {tool_id} not found",
+            )
+        oper = add if atomic_op == ToolUpdateAtomicOperations.INCREMENT else sub
+        update_field = (
+            Tools.total_owned if field is ToolUpdatePaths.OWNED else Tools.total_avail
+        )
+        await session.execute(
+            update(update_field)
+            .where(Tools.tool_id == tool_id)
+            .values(update_field=oper(update_field, value))
+        )
+        # auto commit
+        return result
