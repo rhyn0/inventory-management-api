@@ -29,6 +29,9 @@ pytest-asyncio = "^0.21.1"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.pytest.ini_options]
+markers = ["no_insert: marks tests as not inserting data into the database"]
+
 
 [tool.ruff]
 # Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.

@@ -142,7 +142,7 @@ class ToolPostAtomicUpdate(ToolAtomicUpdateOutBase):
     total_avail: int | None = Field(serialization_alias="postTotalAvailable")
 
 
-class ToolUpdate(ToolBase):
+class ToolUpdate(BaseModel):
     """Define an update set operation for a Tool."""
 
     owned: int | None = Field(None, serialization_alias="total_owned")
@@ -242,8 +242,16 @@ async def update_tool_quantity_set(
             exclude_unset=True, by_alias=True
         ).items():
             setattr(result, field, value)
-        # auto commit
-        return result
+        try:
+            await session.commit()
+        except sa_exc.IntegrityError:
+            # occurs when total_owned < total_avail
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Owned must be greater than or equal to available",
+            ) from None
+    return result
 
 
 @ROUTER.put(
