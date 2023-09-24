@@ -18,6 +18,8 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
 from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
 from sqlalchemy import delete
 from sqlalchemy import exc as sa_exc
 from sqlalchemy import insert
@@ -99,7 +101,7 @@ class ProductCreate(ProductBase):
 class ProductUpdate(BaseModel):
     """Define what fields can be updated on a Product."""
 
-    quantity: int
+    quantity: int = Field(ge=0)
 
 
 class ProductFull(ProductBase):
@@ -109,6 +111,39 @@ class ProductFull(ProductBase):
     """
 
     product_id: int
+
+
+class ProductUpdateBase(BaseModel):
+    """Define a Product that can be serialized out to a response.
+
+    Very similar to the Products in ../database/models.py.
+    This is a shared base of the common fields, should not be instantiated.
+
+    Setting 'from_attributes' will help with validation from a Products item.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    product_id: int
+    vendor_sku: str
+
+
+class ProductPreUpdate(ProductUpdateBase):
+    """Define a Product that can be serialized out to a response.
+
+    This is used for update and get operations, where the get happens before update.
+    """
+
+    quantity: int = Field(ge=0, serialization_alias="preUpdateQuantity")
+
+
+class ProductPostUpdate(ProductUpdateBase):
+    """Define a Product that can be serialized out to a response.
+
+    This is used for update and get operations, where the get happens after update.
+    """
+
+    quantity: int = Field(ge=0, serialization_alias="postUpdateQuantity")
 
 
 @ROUTER.get("", response_model=list[ProductFull])
@@ -132,11 +167,11 @@ async def read_products(
     return result.all()
 
 
-@ROUTER.get("/{prod_id}")
+@ROUTER.get("/{prod_id}", response_model=ProductFull)
 async def read_product_by_id(
     prod_id: int,
     session: DatabaseDep,
-) -> ProductFull:
+):
     """Return a Product present in database.
 
     Does not use pagination dependency as up to one result only.
@@ -148,7 +183,7 @@ async def read_product_by_id(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Product not Found"
         )
-    return result  # type: ignore
+    return result
 
 
 @ROUTER.post("", response_model=ProductFull)
@@ -156,10 +191,23 @@ async def insert_new_product(
     new_prod: Annotated[ProductCreate, Body()], session: DatabaseDep
 ):
     """Take in data for a singular new product and add to database."""
-    async with session.begin():
-        return await session.scalar(
-            insert(Products).values(new_prod.model_dump()).returning(Products)
+    if new_prod.quantity < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Quantity must be non-negative",
         )
+    async with session.begin():
+        try:
+            return await session.scalar(
+                insert(Products).values(new_prod.model_dump()).returning(Products)
+            )
+        except sa_exc.IntegrityError:
+            # integrity can be broken if vendor_sku is not unique
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Vendor SKU already exists",
+            ) from None
 
 
 @ROUTER.delete(path="/{prod_id}", response_model=ProductFull)
@@ -171,21 +219,31 @@ async def remove_product(prod_id: int, session: DatabaseDep):
 
     If there is such a constraint still, respond with 405
     """
-    try:
-        async with session.begin():
-            return await session.scalar(
-                delete(Products)
-                .where(Products.product_id == prod_id)
-                .returning(Products)
-            )
-    except sa_exc.IntegrityError:
-        # TODO: add logging
-        # This happens due to foreign key constraint
-        # from table build_parts (BuildParts)
-        raise HTTPException(
-            status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
-            detail="Product is still part of an active build",
-        ) from None
+    async with session.begin():
+        try:
+            result = (
+                await session.scalars(
+                    delete(Products)
+                    .where(Products.product_id == prod_id)
+                    .returning(Products)
+                )
+            ).one_or_none()
+            if result is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Product not Found"
+                )
+
+        except sa_exc.IntegrityError:
+            session.rollback()
+            # TODO: add logging
+            # This happens due to foreign key constraint
+            # from table build_parts (BuildParts)
+            raise HTTPException(
+                status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                detail="Product is still part of an active build",
+            ) from None
+
+    return result
 
 
 @ROUTER.put(path="/{prod_id}", response_model=ProductFull)
@@ -197,13 +255,22 @@ async def update_product(
     The thinking of this endpoint is that someone has just counted,
     the available stock of a product and is setting the current amount.
     """
+    # quantity being less than 0 is handled by pydantic
     async with session.begin():
-        return await session.scalar(
-            update(Products)
-            .where(Products.product_id == prod_id)
-            .values(quantity=updated_prod.quantity)
-            .returning(Products)
-        )
+        tobe_updated_prod = (
+            await session.scalars(
+                select(Products.product_id, Products.vendor_sku, Products.quantity)
+                .where(Products.product_id == prod_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if tobe_updated_prod is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Product not Found"
+            )
+        tobe_updated_prod.quantity = updated_prod.quantity
+        await session.commit()
+    return tobe_updated_prod
 
 
 @ROUTER.put(path="/{prod_id}/quantity", response_model=ProductFull)
