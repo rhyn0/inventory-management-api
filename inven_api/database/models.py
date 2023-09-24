@@ -2,8 +2,11 @@
 # Standard Library
 from datetime import datetime
 from enum import StrEnum
+from textwrap import dedent
 
 # External Party
+from sqlalchemy import DDL
+from sqlalchemy import event
 from sqlalchemy import func
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import BIGINT
@@ -56,6 +59,28 @@ class InventoryBase(DeclarativeBase):
         return f"<{self.__class__.__name__} {id(self)}>"
 
 
+# defines PG function to update a modified_at column
+MODIFIED_AT_TRIGGER_DDL = DDL(
+    dedent(
+        """
+    CREATE  FUNCTION update_modified_at()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.modified_at = NOW();
+        RETURN NEW;
+    END;
+    $$ language 'plpgsql';
+    """
+    )
+)
+# need it before schema is created since other tables will have it as a trigger
+event.listen(
+    InventoryBase.metadata,
+    "before_create",
+    MODIFIED_AT_TRIGGER_DDL.execute_if(dialect="postgresql"),
+)
+
+
 class Products(InventoryBase):
     """Model of table that contains records of Product information."""
 
@@ -76,6 +101,23 @@ class Products(InventoryBase):
         return self._repr(
             id=self.product_id, name=self.name, vendor_sku=self.vendor_sku
         )
+
+
+PROD_TRIGGER_DDL = DDL(
+    """
+    CREATE TRIGGER products_modified_trigger BEFORE UPDATE
+    ON
+        inventory.products
+    FOR EACH ROW
+    EXECUTE PROCEDURE update_modified_at();
+
+"""
+)
+event.listen(
+    Products.__table__,
+    "after_create",
+    PROD_TRIGGER_DDL.execute_if(dialect="postgresql"),
+)
 
 
 # SQLAlchemy Tables should be plural
