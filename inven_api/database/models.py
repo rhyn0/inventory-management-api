@@ -66,7 +66,7 @@ class Products(InventoryBase):
     name: Mapped[str] = mapped_column(TEXT)
     vendor: Mapped[str] = mapped_column(TEXT)
     product_type: Mapped[ProductTypes] = mapped_column(VARCHAR(100))
-    vendor_sku: Mapped[str] = mapped_column(VARCHAR(255))
+    vendor_sku: Mapped[str] = mapped_column(VARCHAR(255), unique=True)
     quantity: Mapped[int] = mapped_column(BIGINT, sa.CheckConstraint("quantity >= 0"))
     modified_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, server_default=func.now(), onupdate=func.now()
