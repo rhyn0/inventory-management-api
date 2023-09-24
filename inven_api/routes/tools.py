@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from sqlalchemy import delete
 from sqlalchemy import exc as sa_exc
@@ -122,24 +123,20 @@ class ToolAtomicUpdateOutBase(BaseModel):
 class ToolPreAtomicUpdate(ToolAtomicUpdateOutBase):
     """Define object that can be returned from a get pre-atomic update operation."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     # serialization_alias only used by FastAPI when response_model_by_alias=True
     total_owned: int | None = Field(serialization_alias="preTotalOwned")
     total_avail: int | None = Field(serialization_alias="preTotalAvail")
-
-    class config:  # noqa: N801
-        """Define config for this Pydantic model."""
-
-        # response_model_by_alias=True makes it so that the serialization_alias
-        # is used when serializing the model to JSON
-        # https://pydantic-docs.helpmanual.io/usage/model_config/
-        response_model_by_alias = True
 
 
 class ToolPostAtomicUpdate(ToolAtomicUpdateOutBase):
     """Define object that can be returned from a atomic update then get operation."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     total_owned: int | None = Field(serialization_alias="postTotalOwned")
-    total_avail: int | None = Field(serialization_alias="postTotalAvailable")
+    total_avail: int | None = Field(serialization_alias="postTotalAvail")
 
 
 class ToolUpdate(BaseModel):
@@ -180,7 +177,6 @@ async def get_single_tool(tool_id: int, session: DatabaseDep):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found"
         )
-
     return result
 
 
@@ -288,12 +284,13 @@ async def update_tool_quantity_atomic_postget(
                 detail=f"Tool {tool_id} not found",
             )
         oper = add if atomic_op == ToolUpdateAtomicOperations.INCREMENT else sub
-        update_field = (
-            result.total_owned if field is ToolUpdatePaths.OWNED else result.total_avail
-        )
-        update_field = oper(update_field, value)
+        if field is ToolUpdatePaths.OWNED:
+            result.total_owned = oper(Tools.total_owned, value)
+        else:
+            result.total_avail = oper(Tools.total_avail, value)
         # auto commit
-        return result
+    await session.refresh(result, ["total_owned", "total_avail"])
+    return result
 
 
 @ROUTER.put(
@@ -329,14 +326,20 @@ async def update_tool_quantity_atomic_preget(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Tool {tool_id} not found",
             )
+        # have to copy this out of the result
+        # otherwise the session has a reference to the result
+        # which will update the fields when executing the statement at end
+        output_update = ToolPreAtomicUpdate(
+            tool_id=result.tool_id,
+            total_avail=result.total_avail,
+            total_owned=result.total_owned,
+        )
         oper = add if atomic_op == ToolUpdateAtomicOperations.INCREMENT else sub
-        update_field = (
-            Tools.total_owned if field is ToolUpdatePaths.OWNED else Tools.total_avail
-        )
-        await session.execute(
-            update(update_field)
-            .where(Tools.tool_id == tool_id)
-            .values(update_field=oper(update_field, value))
-        )
+        statement = update(Tools).where(Tools.tool_id == tool_id)
+        if field is ToolUpdatePaths.OWNED:
+            statement = statement.values(total_owned=oper(Tools.total_owned, value))
+        else:
+            statement = statement.values(total_avail=oper(Tools.total_avail, value))
+        await session.execute(statement)
         # auto commit
-        return result
+    return output_update
