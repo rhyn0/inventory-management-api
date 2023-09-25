@@ -207,11 +207,6 @@ async def insert_new_product(
     new_prod: Annotated[ProductCreate, Body()], session: DatabaseDep
 ):
     """Take in data for a singular new product and add to database."""
-    if new_prod.quantity < 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Quantity must be non-negative",
-        )
     async with session.begin():
         try:
             return await session.scalar(
@@ -265,7 +260,7 @@ async def remove_product(prod_id: int, session: DatabaseDep):
 
 @ROUTER.put(path="/{prod_id}", response_model=ProductFull)
 async def update_product(
-    prod_id: int, updated_prod: ProductUpdate, session: DatabaseDep
+    prod_id: int, updated_prod: Annotated[ProductUpdate, Body()], session: DatabaseDep
 ):
     """Update the quantity in bulk for a product.
 
@@ -275,15 +270,13 @@ async def update_product(
     # quantity being less than 0 is handled by pydantic
     async with session.begin():
         tobe_updated_prod = (
-            await session.scalars(
-                select(Products.product_id, Products.vendor_sku, Products.quantity)
-                .where(Products.product_id == prod_id)
-                .with_for_update()
+            await session.execute(
+                select(Products).where(Products.product_id == prod_id).with_for_update()
             )
-        ).one_or_none()
+        ).scalar_one_or_none()
         if tobe_updated_prod is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Product not Found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
             )
         tobe_updated_prod.quantity = updated_prod.quantity
         await session.commit()
@@ -322,7 +315,7 @@ async def update_product_quantity_atomic_postget(
         # check for nonexistence - 404
         if tobe_updated_prod is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Product not Found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
             )
         oper = add if atomic_op == AtomicUpdateOperations.INCREMENT else sub
 
@@ -365,7 +358,7 @@ async def update_product_quantity_atomic_preget(
         # check for nonexistence - 404
         if tobe_updated_prod is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Product not Found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
             )
         # create the response object now, otherwise previous quantity value is lost
         response_prod = ProductPreUpdate.model_validate(tobe_updated_prod)

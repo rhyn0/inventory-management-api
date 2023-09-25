@@ -122,3 +122,12 @@ async def db_session(test_engine: AsyncEngine):
 
 # execute this whenever this module is required by another module
 app.dependency_overrides[get_db] = session
+
+
+@pytest.fixture(scope="session")
+def request_headers() -> dict[str, str]:
+    """Headers to send with each request.
+
+    Defines simple content type and acceptable content responses.
+    """
+    return {"accept": "application/json", "Content-Type": "application/json"}

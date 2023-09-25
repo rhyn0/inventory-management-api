@@ -21,10 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Local Modules
 from inven_api.database.models import Products
+from inven_api.dependencies import AtomicUpdateOperations
 from inven_api.routes import products
 
 from .setup_deps import db_sessions
 from .setup_deps import event_loop
+from .setup_deps import request_headers
 from .setup_deps import setup_db
 from .setup_deps import sqlite_schema_file
 from .setup_deps import test_client
@@ -36,7 +38,7 @@ def attrs_present(product_model: products.ProductBase) -> bool:
     """Return whether a given Pydantic Product instance has all attributes."""
     return all(
         getattr(product_model, attr) is not None
-        for attr in products.ProductBase.__fields__
+        for attr in products.ProductBase.model_fields
     )
 
 
@@ -132,7 +134,7 @@ class TestProductRequestBodyUnit:
             # only thing to validly update set is quantity
             assert all(
                 not hasattr(obj, attr)
-                for attr in products.ProductBase.__fields__
+                for attr in products.ProductBase.model_fields
                 if attr != "quantity"
             )
 
@@ -146,7 +148,7 @@ class TestProductRequestBodyUnit:
             # only thing to validly update set is quantity
             assert all(
                 not hasattr(obj, attr)
-                for attr in products.ProductBase.__fields__
+                for attr in products.ProductBase.model_fields
                 if attr != "quantity"
             )
 
@@ -364,14 +366,303 @@ async def insert_product_data(session: AsyncSession, data: dict):
             await session.rollback()
 
 
-@pytest.mark.asyncio()
 @pytest.mark.usefixtures("_pre_insert_product_data")
 class TestProductRoutesIntegration:
     """Collection of tests that use fastapi.TestClient to make example requests."""
 
     @staticmethod
     def keys_present(data: dict) -> bool:
-        return all(key in data for key in products.ProductFull.__fields__)
+        return all(key in data for key in products.ProductFull.model_fields)
+
+    @pytest.mark.asyncio()
+    class TestAsyncDb:
+        """Sub collection of tests that must be marked asyncio."""
+
+        @given(
+            st.text(min_size=1, alphabet=ascii_letters),
+            st.integers(min_value=1, max_value=10),
+        )
+        async def test_get_mult_products_by_query_name(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            product_data: dict,
+            new_name: str,
+            new_products_inserted: int,
+        ):
+            async with test_engine.connect() as conn:
+                for i in range(new_products_inserted):
+                    await insert_product_data(
+                        conn,  # type: ignore
+                        {
+                            **product_data,
+                            "name": new_name,
+                            # unique constraint on vendor_sku
+                            "vendor_sku": f"{product_data['vendor_sku']} {i}",
+                        },
+                    )
+
+            # don't forget pagination requirements
+            response = test_client.get(
+                f"/products?name={new_name}&page_size={new_products_inserted}"
+            )
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert len(response_data) == new_products_inserted
+            assert all(new_name == product["name"] for product in response_data)
+            assert all(
+                product_data["vendor"] in product["vendor"] for product in response_data
+            )
+            async with test_engine.begin() as conn:
+                result = await conn.scalars(
+                    delete(Products)
+                    .where(Products.name == new_name)
+                    .returning(Products)
+                )
+            # auto commit
+            assert len(result.all()) == new_products_inserted
+
+        @given(
+            st.text(min_size=1, alphabet=ascii_letters),
+            st.integers(min_value=2, max_value=10),
+        )
+        async def test_get_products_by_query_name_paging(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            product_data: dict,
+            new_name: str,
+            new_products_inserted: int,
+        ):
+            async with test_engine.connect() as conn:
+                for i in range(new_products_inserted):
+                    await insert_product_data(
+                        conn,  # type: ignore
+                        {
+                            **product_data,
+                            "name": new_name,
+                            # unique constraint on vendor_sku
+                            "vendor_sku": f"{product_data['vendor_sku']} {i}",
+                        },
+                    )
+
+            # test that setting page size and page works
+            for page in range(new_products_inserted):
+                response = test_client.get(
+                    f"/products?name={new_name}&page_size=1&page={page}"
+                )
+                assert response.status_code == status.HTTP_200_OK
+                response_data = response.json()
+                assert len(response_data) == 1
+                assert all(new_name == product["name"] for product in response_data)
+                assert all(
+                    product_data["vendor"] in product["vendor"]
+                    for product in response_data
+                )
+            async with test_engine.begin() as conn:
+                result = await conn.scalars(
+                    delete(Products)
+                    .where(Products.name == new_name)
+                    .returning(Products)
+                )
+            # auto commit
+            assert len(result.all()) == new_products_inserted
+
+        async def test_get_product_by_id(
+            self, test_client: TestClient, test_engine: AsyncEngine
+        ):
+            # obtain a product_id
+            async with test_engine.connect() as conn:
+                result = await conn.execute(select(Products.product_id).limit(1))
+                product_id = result.scalar_one()
+            response = test_client.get(f"/products/{product_id}")
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["product_id"] == product_id
+            assert TestProductRoutesIntegration.keys_present(response_data)
+
+        async def test_update_product_happy(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            request_headers: dict,
+        ):
+            # obtain a product_id
+            async with test_engine.connect() as conn:
+                result = await conn.execute(select(Products.product_id).limit(1))
+                product_id = result.scalar_one()
+            # quantity must be greater than equal to 0
+            # this request requires Content-Type: application/json
+            response = test_client.put(
+                f"/products/{product_id}", json={"quantity": 1}, headers=request_headers
+            )
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["product_id"] == product_id
+            assert response_data["quantity"] == 1
+            assert TestProductRoutesIntegration.keys_present(response_data)
+
+            # check database to confirm it went committed
+            async with test_engine.connect() as conn:
+                result = await conn.execute(
+                    select(Products.quantity).where(Products.product_id == product_id)
+                )
+                assert result.scalar_one() == 1
+
+        async def test_delete_product(
+            self, test_client: TestClient, test_engine: AsyncEngine
+        ):
+            # obtain a product_id
+            async with test_engine.connect() as conn:
+                result = await conn.execute(select(Products.product_id).limit(1))
+                product_id = result.scalar_one()
+            response = test_client.delete(f"/products/{product_id}")
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["product_id"] == product_id
+            assert TestProductRoutesIntegration.keys_present(response_data)
+
+        @given(st.integers(max_value=-1))
+        async def test_update_product_bad_qty(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            request_headers: dict,
+            bad_qty: int,
+        ):
+            # obtain actual product_id
+            async with test_engine.connect() as conn:
+                result = await conn.execute(select(Products.product_id).limit(1))
+                product_id = result.scalar_one()
+            response = test_client.put(
+                f"/products/{product_id}",
+                json={"quantity": bad_qty},
+                headers=request_headers,
+            )
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+            # check error code for quantity and greater than equal to error
+            response_data = response.json()
+            assert response_data["detail"][0]["loc"] == ["body", "quantity"]
+            assert response_data["detail"][0]["type"] == "greater_than_equal"
+
+        @given(
+            st.integers(min_value=1, max_value=10),
+            st.sampled_from(AtomicUpdateOperations),
+        )
+        async def test_postatomic_quantity_update(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            qty: int,
+            op: AtomicUpdateOperations,
+        ):
+            # obtain actual product_id and quantity
+            async with test_engine.connect() as conn:
+                result = await conn.execute(
+                    select(Products.product_id, Products.quantity).limit(1)
+                )
+                product_id, old_qty = result.one()
+            # make sure we don't decrease quantity below 0
+            if op is AtomicUpdateOperations.DECREMENT:
+                qty = min(old_qty, qty)
+            # make PUT request against atomic update endpoint
+            # with value in query params
+            response = test_client.put(
+                f"/products/{product_id}/quantity/{op}/get?value={qty}",
+            )
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["product_id"] == product_id
+            assert "postUpdateQuantity" in response_data
+            assert all(
+                col in response_data
+                for col in products.ProductUpdateBase.model_fields
+                # quantity gets renamed during serialization at this endpoint
+                if col != "quantity"
+            )
+            if op is AtomicUpdateOperations.INCREMENT:
+                in_db_qty = old_qty + qty
+            else:
+                in_db_qty = old_qty - qty
+            assert response_data["postUpdateQuantity"] == in_db_qty
+
+            # check database to confirm it went committed
+            async with test_engine.connect() as conn:
+                result = await conn.execute(
+                    select(Products.quantity).where(Products.product_id == product_id)
+                )
+                assert result.scalar_one() == in_db_qty
+
+        @given(
+            st.integers(min_value=1, max_value=10),
+            st.sampled_from(AtomicUpdateOperations),
+        )
+        async def test_postatomic_quantity_update_bad_id(
+            self, test_client: TestClient, qty: int, op: str
+        ):
+            # make PUT request against atomic update endpoint
+            # with value in query params
+            response = test_client.put(
+                f"/products/-1/quantity/{op}/get?value={qty}",
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data == {"detail": "Product not found"}
+
+        @given(
+            st.integers(min_value=1, max_value=10),
+            st.sampled_from(AtomicUpdateOperations),
+        )
+        async def test_preatomic_quantity_update(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            qty: int,
+            op: AtomicUpdateOperations,
+        ):
+            # obtain actual product_id and quantity
+            async with test_engine.connect() as conn:
+                result = await conn.execute(
+                    select(Products.product_id, Products.quantity)
+                    .where(Products.quantity > 0)
+                    .limit(1)
+                )
+                product_id, old_qty = result.one()
+            # make sure we don't decrease quantity below 0
+            qty = min(old_qty, qty)
+            # make PUT request against atomic update endpoint
+            # with value in query params
+            response = test_client.put(
+                f"/products/{product_id}/quantity/get/{op}?value={qty}",
+            )
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["product_id"] == product_id
+            assert "preUpdateQuantity" in response_data
+            assert all(
+                col in response_data
+                for col in products.ProductUpdateBase.model_fields
+                # quantity gets renamed during serialization at this endpoint
+                if col != "quantity"
+            )
+            assert response_data["preUpdateQuantity"] == old_qty
+
+            # check database to confirm it went committed
+            async with test_engine.connect() as conn:
+                result = await conn.execute(
+                    select(Products.quantity).where(Products.product_id == product_id)
+                )
+                assert result.scalar_one() == (
+                    (old_qty - qty)
+                    if op is AtomicUpdateOperations.DECREMENT
+                    else (old_qty + qty)
+                )
 
     @pytest.mark.no_insert()
     @pytest.mark.usefixtures("setup_db")
@@ -400,105 +691,6 @@ class TestProductRoutesIntegration:
         assert response.status_code == status.HTTP_200_OK
         assert len(response.json()) == 1
         assert all(product_data[key] == response.json()[0][key] for key in product_data)
-
-    @given(
-        st.text(min_size=1, alphabet=ascii_letters),
-        st.integers(min_value=1, max_value=10),
-    )
-    async def test_get_mult_products_by_query_name(
-        self,
-        test_client: TestClient,
-        test_engine: AsyncEngine,
-        product_data: dict,
-        new_name: str,
-        new_products_inserted: int,
-    ):
-        async with test_engine.connect() as conn:
-            for i in range(new_products_inserted):
-                await insert_product_data(
-                    conn,  # type: ignore
-                    {
-                        **product_data,
-                        "name": new_name,
-                        # unique constraint on vendor_sku
-                        "vendor_sku": f"{product_data['vendor_sku']} {i}",
-                    },
-                )
-
-        # don't forget pagination requirements
-        response = test_client.get(
-            f"/products?name={new_name}&page_size={new_products_inserted}"
-        )
-        assert response.status_code == status.HTTP_200_OK
-        response_data = response.json()
-        assert len(response_data) == new_products_inserted
-        assert all(new_name == product["name"] for product in response_data)
-        assert all(
-            product_data["vendor"] in product["vendor"] for product in response_data
-        )
-        async with test_engine.begin() as conn:
-            result = await conn.scalars(
-                delete(Products).where(Products.name == new_name).returning(Products)
-            )
-        # auto commit
-        assert len(result.all()) == new_products_inserted
-
-    @given(
-        st.text(min_size=1, alphabet=ascii_letters),
-        st.integers(min_value=2, max_value=10),
-    )
-    async def test_get_products_by_query_name_paging(
-        self,
-        test_client: TestClient,
-        test_engine: AsyncEngine,
-        product_data: dict,
-        new_name: str,
-        new_products_inserted: int,
-    ):
-        async with test_engine.connect() as conn:
-            for i in range(new_products_inserted):
-                await insert_product_data(
-                    conn,  # type: ignore
-                    {
-                        **product_data,
-                        "name": new_name,
-                        # unique constraint on vendor_sku
-                        "vendor_sku": f"{product_data['vendor_sku']} {i}",
-                    },
-                )
-
-        # test that setting page size and page works
-        for page in range(new_products_inserted):
-            response = test_client.get(
-                f"/products?name={new_name}&page_size=1&page={page}"
-            )
-            assert response.status_code == status.HTTP_200_OK
-            response_data = response.json()
-            assert len(response_data) == 1
-            assert all(new_name == product["name"] for product in response_data)
-            assert all(
-                product_data["vendor"] in product["vendor"] for product in response_data
-            )
-        async with test_engine.begin() as conn:
-            result = await conn.scalars(
-                delete(Products).where(Products.name == new_name).returning(Products)
-            )
-        # auto commit
-        assert len(result.all()) == new_products_inserted
-
-    async def test_get_product_by_id(
-        self, test_client: TestClient, test_engine: AsyncEngine
-    ):
-        # obtain a product_id
-        async with test_engine.connect() as conn:
-            result = await conn.execute(select(Products.product_id).limit(1))
-            product_id = result.scalar_one()
-        response = test_client.get(f"/products/{product_id}")
-        assert response.status_code == status.HTTP_200_OK
-        response_data = response.json()
-        assert isinstance(response_data, dict)
-        assert response_data["product_id"] == product_id
-        assert self.keys_present(response_data)
 
     def test_get_product_by_id_fail(self, test_client: TestClient):
         response = test_client.get("/products/-1")
@@ -537,22 +729,34 @@ class TestProductRoutesIntegration:
         assert isinstance(response_data, dict)
         assert response_data["detail"] == "Vendor SKU already exists"
 
-    async def test_delete_product(
-        self, test_client: TestClient, test_engine: AsyncEngine
-    ):
-        # obtain a product_id
-        async with test_engine.connect() as conn:
-            result = await conn.execute(select(Products.product_id).limit(1))
-            product_id = result.scalar_one()
-        response = test_client.delete(f"/products/{product_id}")
-        assert response.status_code == status.HTTP_200_OK
-        response_data = response.json()
-        assert isinstance(response_data, dict)
-        assert response_data["product_id"] == product_id
-        assert self.keys_present(response_data)
-
     def test_delete_product_not_found(self, test_client: TestClient):
         response = test_client.delete("/products/-1")
         assert response.status_code == status.HTTP_404_NOT_FOUND
         response_data = response.json()
+        assert response_data == {"detail": "Product not found"}
+
+    def test_update_product_not_found(
+        self, test_client: TestClient, request_headers: dict
+    ):
+        response = test_client.put(
+            "/products/-1", json={"quantity": 1}, headers=request_headers
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert response_data == {"detail": "Product not found"}
+
+    @given(
+        st.integers(min_value=1, max_value=10), st.sampled_from(AtomicUpdateOperations)
+    )
+    def test_preatomic_quantity_update_bad_id(
+        self, test_client: TestClient, qty: int, op: AtomicUpdateOperations
+    ):
+        # make PUT request against atomic update endpoint
+        # with value in query params and invalid id
+        response = test_client.put(
+            f"/products/-1/quantity/get/{op}?value={qty}",
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert isinstance(response_data, dict)
         assert response_data == {"detail": "Product not found"}
