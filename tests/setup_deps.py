@@ -1,7 +1,7 @@
 # Standard Library
 import asyncio
+from collections.abc import Generator
 from tempfile import NamedTemporaryFile
-from typing import Generator
 
 # External Party
 from fastapi.testclient import TestClient
@@ -19,7 +19,7 @@ from sqlalchemy.orm import sessionmaker
 # Local Modules
 from inven_api.database.models import InventoryBase
 from inven_api.dependencies import get_db
-from inven_api.main import APP as app
+from inven_api.main import APP as app  # noqa: N811
 
 # make a test engine using sqlite in memory db
 # _test_engine = create_engine("sqlite://", echo=True)
@@ -48,23 +48,30 @@ def valid_avail_owned(draw) -> tuple[int, int]:
 
 @pytest.fixture(scope="session")
 def test_client():
+    """Accessor to the API without spawning the server."""
     with TestClient(app=app, base_url="http://test") as client:
         yield client
 
 
 @pytest.fixture(scope="session")
 def test_engine():
+    """Wrap the private test engine."""
     return _test_engine
 
 
 @pytest.fixture(scope="session")
 def sqlite_schema_file():
+    """Where the attached SQLite database is stored."""
     with NamedTemporaryFile(mode="w+b", suffix=".db", delete=True) as f:
         yield f.name
 
 
 @pytest.fixture(scope="session")
 def event_loop():
+    """Override the pytest_asyncio event_loop fixture.
+
+    Want this to be session scoped.
+    """
     policy = asyncio.get_event_loop_policy()
     loop = policy.new_event_loop()
     yield loop
@@ -73,6 +80,7 @@ def event_loop():
 
 @pytest_asyncio.fixture(scope="session")
 async def setup_db(test_engine: AsyncEngine, sqlite_schema_file: str):
+    """Setup the database for the session."""
     async with db_sessions() as session:
         async with test_engine.begin() as conn:
             await conn.execute(
@@ -91,6 +99,7 @@ async def setup_db(test_engine: AsyncEngine, sqlite_schema_file: str):
 
 @pytest.fixture(scope="module")
 def monkey_mod() -> Generator[pytest.MonkeyPatch, None, None]:
+    """If you need to monkeypatch something that could be 'module' scoped, use this."""
     # External Party
     from _pytest.monkeypatch import MonkeyPatch
 
@@ -100,14 +109,25 @@ def monkey_mod() -> Generator[pytest.MonkeyPatch, None, None]:
 
 
 async def session():
+    """Function to override the APP's database dependency."""
     async with db_sessions() as session:
         yield session
 
 
-@pytest.fixture()
+@pytest_asyncio.fixture()
 async def db_session(test_engine: AsyncEngine):
+    """If a function wants to use async_sessionmaker, instead of engine."""
     return session()
 
 
 # execute this whenever this module is required by another module
 app.dependency_overrides[get_db] = session
+
+
+@pytest.fixture(scope="session")
+def request_headers() -> dict[str, str]:
+    """Headers to send with each request.
+
+    Defines simple content type and acceptable content responses.
+    """
+    return {"accept": "application/json", "Content-Type": "application/json"}

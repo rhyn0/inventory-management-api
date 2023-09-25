@@ -1,6 +1,8 @@
 """Test inven_api/common/config.py classes and functions."""
 # Standard Library
+from random import choice
 from string import ascii_letters
+from string import ascii_lowercase
 import tempfile
 
 # External Party
@@ -16,7 +18,18 @@ from inven_api.common.config import EnvConfig
 from inven_api.common.config import InvalidCaseInsenstiveKeyError
 
 ASCII_TEXT_ST = st.text(alphabet=ascii_letters)
+ASCII_LOWERTEXT_ST = st.text(alphabet=ascii_lowercase)
 ALL_CASE_FUNCS = [str.lower, str.capitalize, str.upper, lambda x: x]
+
+
+# custom strategies that yields a dict
+@st.composite
+def ci_unique_dict(draw):
+    data = draw(st.dictionaries(ASCII_LOWERTEXT_ST, ASCII_TEXT_ST))
+    return {
+        "".join([choice(ALL_CASE_FUNCS)(c) for c in key]): value
+        for key, value in data.items()
+    }
 
 
 @pytest.fixture(scope="session")
@@ -85,10 +98,11 @@ class TestCaseInsensDictUnit:
             CaseInsensitiveDict._key_modifier(random_key)
 
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-    @given(st.dictionaries(ASCII_TEXT_ST, ASCII_TEXT_ST))
+    @given(ci_unique_dict())
     def test_update(self, empty_caseinsens: CaseInsensitiveDict, update_data: dict):
         # clear the empty dict due to how Hypothesis treats function fixtures
         empty_caseinsens.clear()
+        assert len(empty_caseinsens) == 0
         empty_caseinsens.update(update_data)
         assert len(empty_caseinsens) == len(update_data)
         for key, value in update_data.items():
