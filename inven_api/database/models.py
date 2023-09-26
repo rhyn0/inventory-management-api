@@ -139,7 +139,11 @@ class BuildParts(InventoryBase):
     build_id: Mapped[int] = mapped_column(
         sa.ForeignKey(Builds.build_id, ondelete="CASCADE")
     )
-    quantity_required: Mapped[int]
+    quantity_required: Mapped[int] = mapped_column(
+        # must be greater than 0, can't build with 0 of a product
+        # would just unlink the dependency then
+        sa.CheckConstraint("quantity_required > 0")
+    )
 
     def __repr__(self) -> str:  # noqa: D105
         return self._repr(
@@ -165,7 +169,9 @@ class BuildTools(InventoryBase):
     build_id: Mapped[int] = mapped_column(
         sa.ForeignKey(Builds.build_id, ondelete="CASCADE")
     )
-    quantity_required: Mapped[int]
+    quantity_required: Mapped[int] = mapped_column(
+        sa.CheckConstraint("quantity_required > 0")
+    )
 
     def __repr__(self) -> str:  # noqa: D105
         return self._repr(

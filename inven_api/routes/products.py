@@ -7,10 +7,6 @@ from typing import Annotated
 from typing import Any
 
 # External Party
-from database import Products
-from database import ProductTypes
-from dependencies import DatabaseDep
-from dependencies import PaginationDep
 from fastapi import APIRouter
 from fastapi import Body
 from fastapi import Depends
@@ -19,6 +15,12 @@ from fastapi import Query
 from fastapi import status
 from pydantic import BaseModel
 from sqlalchemy import select
+
+# Local Modules
+from database import Products
+from database import ProductTypes
+from dependencies import DatabaseDep
+from dependencies import PaginationDep
 
 ROUTER = APIRouter(prefix="/products", tags=["products"])
 
