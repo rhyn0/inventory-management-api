@@ -4,13 +4,6 @@ import argparse
 import asyncio
 
 # External Party
-from database import BuildParts
-from database import Builds
-from database import InventoryBase
-from database import Products
-from database import ProductTypes
-from database import Tools
-from database import get_engine
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +11,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 # Local Modules
 from common import DbConfig
+from database import BuildParts
+from database import Builds
+from database import InventoryBase
+from database import Products
+from database import ProductTypes
+from database import Tools
+from database import get_engine
 
 BIRDHOUSE_PRODUCTS = {
     "dowel": Products(
