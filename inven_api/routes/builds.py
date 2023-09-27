@@ -289,16 +289,15 @@ class BuildToolFull(BuildRelationFullBase):
 
 
 # TODO: make design decision on whether to include full relation part or not
-# so this request could return {build_id: 1, product_id: 1, quantity: 10}
-# or return {build_id: 1, product: {product_id: 1, name: "hammer"}, quantity: 10}
-# or even {
-#   build_id: 1,
-#   vendor: "HomeDepot",
-#   product: {
-#       product_id: 1,
-#       name: "hammer"
-#   },
-#   quantity: 10}
+# or return {
+# build_id: 1,
+# product: {
+#   product_id: 1,
+#   name: "hammer",
+#   sku: "1234",
+#   product_type: "material",
+# },
+# quantity: 10}
 @build_part_router.get(path="", response_model=list[BuildPartFull])
 async def read_all_build_parts_for_id(build_id: int, session: DatabaseDep):
     """Return all BuildParts present in database for a given build."""
@@ -338,6 +337,17 @@ async def update_buildpart_for_build(
     ...
 
 
+# TODO: implement intersection point for tools
+# The same many many intersection exists for tools
+# So this path will respond with objects that look like:
+# {
+# build_id: 1,
+# tool: {
+#   tool_id: 1,
+#   name: "hammer",
+#   vendor: "home depot",
+# },
+# quantity: 10}
 @build_tool_router.get(path="", response_model=list[BuildToolFull])
 async def get_all_buildtools_for_id(build_id: int, session: DatabaseDep):
     """Return all BuildTools present in database for a given build."""
