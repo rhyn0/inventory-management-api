@@ -10,7 +10,8 @@ from fastapi import Depends
 from fastapi import Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .database import DbSession
+# Local Modules
+from inven_api.database import DbSession
 
 
 class AtomicUpdateOperations(StrEnum):
