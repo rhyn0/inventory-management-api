@@ -125,7 +125,6 @@ exclude = [
     "dist",
     "node_modules",
     "venv",
-    "tests",          # don't want Ruff going crazy because the tests aren't perfectly commented
 ]
 
 # Same as Black.
@@ -145,6 +144,16 @@ format = "text"
 max-complexity = 10
 
 [tool.ruff.per-file-ignores]
+"tests/*.py" = [
+    "D102",    # Missing docstring in public method - skip these for tests in classes
+    "D100",    # Missing docstring in public module - skip these for tests in classes
+    "F811",    # redefinition of unused - catches pytest fixtures
+    "F401",    # imported but unused - catches pytest fixtures
+    "PLR0913", # too many arguments to method
+]
+"**/__init__.py" = [
+    "D104", # Missing docstring in public package
+]
 
 [tool.ruff.pydocstyle]
 convention = "google"
@@ -152,7 +161,7 @@ convention = "google"
 [tool.isort]
 force_sort_within_sections = true
 force_single_line = true
-known_first_party = ["inven_api", "common"]
+known_first_party = ["inven_api", "common", "dependencies", "database"]
 # this new option doesn't work quite yet
 # import_headings = { "STDLIB" = "Standard Library Ruff", "THIRDPARTY" = "External Party", "FIRSTPARTY" = "My Modules" }
 import_heading_stdlib = "Standard Library"

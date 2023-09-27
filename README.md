@@ -21,6 +21,7 @@ Project with Python and PostgreSQL to model an inventory tracking system
 
 [ ] IaC to deploy to *Production*\
 [ ] [Docker Compose File](https://www.educative.io/blog/docker-compose-tutorial)
+[ ] Change HTTPException details to be more like FastAPI
 
 ## Purpose
 

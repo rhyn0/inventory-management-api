@@ -1,5 +1,6 @@
 """Test inven_api/common/config.py classes and functions."""
 # Standard Library
+from collections.abc import Generator
 from random import choice
 from string import ascii_letters
 from string import ascii_lowercase
@@ -25,6 +26,7 @@ ALL_CASE_FUNCS = [str.lower, str.capitalize, str.upper, lambda x: x]
 # custom strategies that yields a dict
 @st.composite
 def ci_unique_dict(draw):
+    """Strategy to generate a dict with unique keys with respect to case sensitivity."""
     data = draw(st.dictionaries(ASCII_LOWERTEXT_ST, ASCII_TEXT_ST))
     return {
         "".join([choice(ALL_CASE_FUNCS)(c) for c in key]): value
@@ -34,11 +36,13 @@ def ci_unique_dict(draw):
 
 @pytest.fixture(scope="session")
 def example_data() -> dict:
+    """Random dictionary of data."""
     return {"FOO": "BAR", "BAZ": "BIFF"}
 
 
 @pytest.fixture(scope="session")
-def example_config_file(example_data: dict) -> str:
+def example_config_file(example_data: dict) -> Generator[str, None, None]:
+    """Create a temporary file to emulate a .env file."""
     with tempfile.NamedTemporaryFile(mode="w+") as file:
         file.writelines([f"{key}={value}\n" for key, value in example_data.items()])
         file.flush()
@@ -46,6 +50,8 @@ def example_config_file(example_data: dict) -> str:
 
 
 class TestCaseInsensDictUnit:
+    """Collection of tests for CaseInsensitiveDict class."""
+
     _case_funcs = ALL_CASE_FUNCS
 
     @pytest.fixture()
@@ -122,6 +128,8 @@ class TestCaseInsensDictUnit:
 
 
 class TestEnvConfigUnit:
+    """Collection of tests for the EnvConfig class."""
+
     @pytest.fixture()
     def example_cfg(self, example_config_file: str) -> EnvConfig:
         return EnvConfig(example_config_file)
@@ -143,7 +151,7 @@ class TestEnvConfigUnit:
         for key, value in example_data.items():
             assert key not in cfg_repr
             assert value not in cfg_repr
-        assert "EnvConfig(items=2)" == cfg_repr
+        assert cfg_repr == "EnvConfig(items=2)"
         # shouldn't leak the details in str call either
         assert str(example_cfg) == cfg_repr
 

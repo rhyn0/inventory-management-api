@@ -2,10 +2,10 @@
 # External Party
 from fastapi import FastAPI
 
-from .routes import router
+from .routes import PRODUCT_ROUTER
 
 APP = FastAPI()
-APP.include_router(router)
+APP.include_router(PRODUCT_ROUTER)
 
 
 @APP.get("/")

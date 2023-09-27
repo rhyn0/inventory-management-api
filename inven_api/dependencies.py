@@ -1,6 +1,7 @@
 """Things that get litterd around."""
 # Standard Library
 from collections.abc import AsyncGenerator
+from enum import StrEnum
 from typing import Annotated
 from typing import Any
 
@@ -11,6 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Local Modules
 from inven_api.database import DbSession
+
+
+class AtomicUpdateOperations(StrEnum):
+    """Enum of atomic operations for updating an item's quantity field(s)."""
+
+    INCREMENT = "increment"
+    DECREMENT = "decrement"
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -24,7 +32,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def pagination_query(
     page: Annotated[int, Query()] = 0,
-    page_size: Annotated[int, Query()] = 5,
+    page_size: Annotated[int, Query(gt=0)] = 5,
 ) -> dict[str, Any]:
     """Define pagination query parameters.
 

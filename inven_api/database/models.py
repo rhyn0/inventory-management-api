@@ -66,7 +66,7 @@ class Products(InventoryBase):
     name: Mapped[str] = mapped_column(TEXT)
     vendor: Mapped[str] = mapped_column(TEXT)
     product_type: Mapped[ProductTypes] = mapped_column(VARCHAR(100))
-    vendor_sku: Mapped[str] = mapped_column(VARCHAR(255))
+    vendor_sku: Mapped[str] = mapped_column(VARCHAR(255), unique=True)
     quantity: Mapped[int] = mapped_column(BIGINT, sa.CheckConstraint("quantity >= 0"))
     modified_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, server_default=func.now(), onupdate=func.now()
@@ -133,8 +133,12 @@ class BuildParts(InventoryBase):
 
     __table_args__ = (sa.PrimaryKeyConstraint("product_id", "build_id"),)
 
-    product_id: Mapped[int] = mapped_column(sa.ForeignKey(Products.product_id))
-    build_id: Mapped[int] = mapped_column(sa.ForeignKey(Builds.build_id))
+    product_id: Mapped[int] = mapped_column(
+        sa.ForeignKey(Products.product_id, ondelete="RESTRICT")
+    )
+    build_id: Mapped[int] = mapped_column(
+        sa.ForeignKey(Builds.build_id, ondelete="CASCADE")
+    )
     quantity_required: Mapped[int]
 
     def __repr__(self) -> str:  # noqa: D105
@@ -155,8 +159,12 @@ class BuildTools(InventoryBase):
 
     __table_args__ = (sa.PrimaryKeyConstraint("tool_id", "build_id"),)
 
-    tool_id: Mapped[int] = mapped_column(sa.ForeignKey(Tools.tool_id))
-    build_id: Mapped[int] = mapped_column(sa.ForeignKey(Builds.build_id))
+    tool_id: Mapped[int] = mapped_column(
+        sa.ForeignKey(Tools.tool_id, ondelete="RESTRICT")
+    )
+    build_id: Mapped[int] = mapped_column(
+        sa.ForeignKey(Builds.build_id, ondelete="CASCADE")
+    )
     quantity_required: Mapped[int]
 
     def __repr__(self) -> str:  # noqa: D105
