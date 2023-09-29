@@ -10,14 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 # Local Modules
-from common import DbConfig
-from database import BuildParts
-from database import Builds
-from database import InventoryBase
-from database import Products
-from database import ProductTypes
-from database import Tools
-from database import get_engine
+from inven_api.common import DbConfig
+from inven_api.database import BuildProducts
+from inven_api.database import Builds
+from inven_api.database import InventoryBase
+from inven_api.database import Products
+from inven_api.database import ProductTypes
+from inven_api.database import Tools
+from inven_api.database import get_engine
 
 BIRDHOUSE_PRODUCTS = {
     "dowel": Products(
@@ -122,7 +122,7 @@ async def insert_dependent_data(session_maker: async_sessionmaker[AsyncSession])
 
         session.add_all(
             [
-                BuildParts(
+                BuildProducts(
                     product_id=pid,
                     build_id=bom_id,
                     quantity_required=10,

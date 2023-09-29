@@ -3,8 +3,8 @@
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 # Local Modules
-from database.connection import get_engine
 from inven_api.common import DbConfig
+from inven_api.database.connection import get_engine
 
 _engine = get_engine(
     hostname=DbConfig.INVEN_DB_ENDPOINT,

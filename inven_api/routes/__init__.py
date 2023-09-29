@@ -10,3 +10,5 @@ router = APIRouter()
 router.include_router(PRODUCT_ROUTER)
 router.include_router(TOOL_ROUTER)
 router.include_router(BUILD_ROUTER)
+
+_all = [router]
