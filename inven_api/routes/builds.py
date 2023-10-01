@@ -102,9 +102,21 @@ class BuildCreate(BuildBase):
 
 
 class BuildUpdateBase(BaseModel):
-    """Define attributes of a Build that can be updated."""
+    """Define attributes of a Build that can be updated.
+
+    Do not instantiate this one, should inherit instead.
+    """
 
     name: str
+
+
+class BuildUpdateIn(BuildUpdateBase):
+    """Instantiable version of BuildUpdateBase.
+
+    No additional columns.
+    """
+
+    pass  # noqa: PIE790
 
 
 class BuildFull(BuildBase):
@@ -113,6 +125,8 @@ class BuildFull(BuildBase):
     Just adds 'id' field which is necessary for responses.
     """
 
+    model_config = ConfigDict(from_attributes=True)
+
     build_id: int
 
 
@@ -120,7 +134,7 @@ class BuildFull(BuildBase):
 async def read_all_builds(
     session: DatabaseDep,
     pagination: PaginationDep,
-    product_spec: BuildDep,
+    build_spec: BuildDep,
 ):
     """Return all Products present in database."""
     statement = (
@@ -128,7 +142,7 @@ async def read_all_builds(
         .offset(pagination["page"] * pagination["limit"])
         .limit(pagination["limit"])
     )
-    statement = _apply_spec_statement(statement, specs=product_spec)
+    statement = _apply_spec_statement(statement, specs=build_spec)
     # sclars expands result columns into the tuple
     # otherwise will receive a tuple containing the Builds object
     result = await session.scalars(statement)
@@ -203,7 +217,7 @@ async def delete_build_by_id(build_id: int, session: DatabaseDep):
 
 @ROUTER.put(path="/{build_id}", response_model=BuildFull)
 async def update_build_by_id(
-    build_id: int, session: DatabaseDep, new_fields: Annotated[BuildUpdateBase, Body()]
+    build_id: int, session: DatabaseDep, new_fields: Annotated[BuildUpdateIn, Body()]
 ):
     """Update fields of a Build based on input data.
 
@@ -255,6 +269,8 @@ class BuildRelationUpdateBase(BaseModel):
     """Define attributes of a BuildPart that can be updated.
 
     Do not instantiate this, it is an inheritable base.
+    Even though this is a copy of BuildRelationBase, we need to define it
+    seperately so that future changes to data models are easier.
     """
 
     # only quantity since product_id is not updatable
@@ -283,7 +299,7 @@ class BuildRelationFullBase(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    build_id: int
+    build_id: int = Field(gt=0)
 
 
 class ProductBuildLinkOut(BaseModel):

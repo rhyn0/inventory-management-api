@@ -1,6 +1,8 @@
 # Standard Library
 import asyncio
 from collections.abc import Generator
+import contextlib
+from string import ascii_letters
 from tempfile import NamedTemporaryFile
 
 # External Party
@@ -9,6 +11,7 @@ from hypothesis import strategies as st
 import pytest
 import pytest_asyncio
 from sqlalchemy import create_engine
+from sqlalchemy import exc as sa_exc
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,12 +23,16 @@ from sqlalchemy.orm import sessionmaker
 from inven_api.database.models import InventoryBase
 from inven_api.dependencies import get_db
 from inven_api.main import APP as app  # noqa: N811
+from inven_api.routes import products
 
 # make a test engine using sqlite in memory db
 # _test_engine = create_engine("sqlite://", echo=True)
 # db_sessions = sessionmaker(_test_engine, expire_on_commit=False)
 _test_engine = create_async_engine("sqlite+aiosqlite://", echo=False)
 db_sessions = async_sessionmaker(_test_engine, expire_on_commit=False)
+
+ASCII_ST = st.text(alphabet=ascii_letters)
+SQLITE_MAX_INT = 9223372036854775807
 
 
 @st.composite
@@ -72,8 +79,11 @@ def event_loop():
 
     Want this to be session scoped.
     """
-    policy = asyncio.get_event_loop_policy()
-    loop = policy.new_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
     yield loop
     loop.close()
 
@@ -83,11 +93,14 @@ async def setup_db(test_engine: AsyncEngine, sqlite_schema_file: str):
     """Setup the database for the session."""
     async with db_sessions() as session:
         async with test_engine.begin() as conn:
-            await conn.execute(
-                text("ATTACH DATABASE :file AS inventory"),
-                [{"file": sqlite_schema_file}],
-            )
-            await conn.run_sync(InventoryBase.metadata.create_all)
+            with contextlib.suppress(sa_exc.OperationalError):
+                # we can skip this if the database is already attached.
+                await conn.execute(
+                    text("ATTACH DATABASE :file AS inventory"),
+                    [{"file": sqlite_schema_file}],
+                )
+                await conn.run_sync(InventoryBase.metadata.create_all)
+
         # loud during call
         test_engine.echo = True
         yield session
@@ -131,3 +144,9 @@ def request_headers() -> dict[str, str]:
     Defines simple content type and acceptable content responses.
     """
     return {"accept": "application/json", "Content-Type": "application/json"}
+
+
+@st.composite
+def product_type_strategy(draw):
+    """Strategy to randomly draw a ProductType."""
+    return draw(st.sampled_from(products.ProductTypes))

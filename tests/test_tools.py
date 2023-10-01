@@ -630,9 +630,8 @@ class TestToolRoutesIntegration:
         assert new_avail_qty == tool_avail_qty
 
     @given(st.integers(min_value=1))
-    async def test_pre_atomic_update_bad_id(
+    def test_pre_atomic_update_bad_id(
         self,
-        test_engine: AsyncEngine,
         test_client: TestClient,
         qty: int,
     ):

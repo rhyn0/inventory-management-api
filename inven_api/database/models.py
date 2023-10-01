@@ -1,6 +1,7 @@
 """This file stores all relevant information on the PostgreSQL tables."""
 # Standard Library
 from datetime import datetime
+from enum import EnumMeta
 from enum import StrEnum
 
 # External Party
@@ -17,7 +18,35 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 
-class ProductTypes(StrEnum):
+class EnumMetaContains(EnumMeta):
+    """Metaclass for Enum that allows for checking if a value is in the Enum."""
+
+    def __contains__(mcls, item) -> bool:  # noqa: N805
+        """Check if item is in cls.
+
+        Not using self since this is a metaclass.
+        mcls is the implementing class.
+
+        Args:
+            item: item to check
+
+        Returns:
+            bool: True if item is in cls
+        """
+        try:
+            mcls(item)
+        except ValueError:
+            return False
+        return True
+
+
+class StrEnumContainsMix(StrEnum, metaclass=EnumMetaContains):
+    """Mix together the member attributes of StrEnum and the meta's contain methods."""
+
+    pass  # noqa: PIE790
+
+
+class ProductTypes(StrEnumContainsMix):
     """Enumerate all possible Product Types."""
 
     PART = "part"  # e.g. nails
