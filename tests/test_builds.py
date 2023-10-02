@@ -19,13 +19,25 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Local Modules
+from inven_api.database.models import BuildProducts
 from inven_api.database.models import Builds
+from inven_api.database.models import BuildTools
+from inven_api.database.models import Products
+from inven_api.database.models import Tools
 from inven_api.dependencies import AtomicUpdateOperations
 from inven_api.routes import builds
 from inven_api.routes import products
-from inven_api.routes.builds import BuildProductFullAll
-from inven_api.routes.builds import BuildProductFullSingle
-from inven_api.routes.builds import BuildRelationBase
+from inven_api.routes.build_products import BuildProductCreate
+from inven_api.routes.build_products import BuildProductFullAll
+from inven_api.routes.build_products import BuildProductFullSingle
+from inven_api.routes.build_products import BuildProductUpdate
+from inven_api.routes.build_products import ProductBuildLinkOut
+from inven_api.routes.build_tools import BuildToolCreate
+from inven_api.routes.build_tools import BuildToolFullAll
+from inven_api.routes.build_tools import BuildToolFullSingle
+from inven_api.routes.build_tools import BuildToolUpdate
+from inven_api.routes.build_tools import ToolBuildLinkOut
+from inven_api.routes.http_models import BuildRelationBase
 
 from .setup_deps import ASCII_ST
 from .setup_deps import SQLITE_MAX_INT
@@ -37,16 +49,6 @@ from .setup_deps import setup_db
 from .setup_deps import sqlite_schema_file
 from .setup_deps import test_client
 from .setup_deps import test_engine
-
-
-@pytest.fixture(scope="session")
-def single_build_product() -> dict:
-    """Defines what a BuildProduct looks like."""
-    return {
-        "product_id": 1,
-        "build_id": 1,
-        "quantity_required": 2,
-    }
 
 
 @pytest.fixture(scope="session")
@@ -187,6 +189,51 @@ def single_build():
     }
 
 
+@pytest.fixture(scope="session")
+def single_product():
+    """Create a Build with hardcoded defaults."""
+    return {
+        "product_id": 1,
+        "name": "example material",
+        "product_type": "material",
+        "vendor": "ryan",
+        "vendor_sku": "ryan-mat",
+        "quantity": 10,
+    }
+
+
+@pytest.fixture(scope="session")
+def single_tool():
+    """Create a Build with hardcoded defaults."""
+    return {
+        "tool_id": 1,
+        "name": "example tool",
+        "vendor": "ryan hardware",
+        "total_owned": 10,
+        "total_avail": 10,
+    }
+
+
+@pytest.fixture(scope="session")
+def single_build_product(single_build: dict, single_product: dict) -> dict:
+    """Defines what a BuildProduct looks like."""
+    return {
+        "product_id": single_product["product_id"],
+        "build_id": single_build["build_id"],
+        "quantity_required": 2,
+    }
+
+
+@pytest.fixture(scope="session")
+def single_build_tool(single_tool: dict, single_build: dict) -> dict:
+    """Defines what a BuildTool looks like."""
+    return {
+        "tool_id": single_tool["tool_id"],
+        "build_id": single_build["build_id"],
+        "quantity_required": 2,
+    }
+
+
 NamedProductResult = namedtuple(
     "NamedProductResult",
     ("product_id", "name", "vendor_sku", "product_type", "quantity_required"),
@@ -207,12 +254,15 @@ class TestBuildProductResponseUnit:
     def test_build_product_full_single_init(self, joined_build_prod: dict):
         """Test the BuildProductFullSingle model."""
         build_product = BuildProductFullSingle(**joined_build_prod)
-        assert build_product.product.product_id == joined_build_prod["product_id"]
+        assert (
+            build_product.product.product_id
+            == joined_build_prod["product"]["product_id"]
+        )
         assert build_product.build_id == joined_build_prod["build_id"]
         assert not hasattr(build_product, "quantity_required")
         assert (
             build_product.product.quantity_required
-            == joined_build_prod["quantity_required"]
+            == joined_build_prod["product"]["quantity_required"]
         )
         # this exclude_none=True is important to use
         # otherwise the following will fail
@@ -366,7 +416,7 @@ class TestBuildModelsUnit:
         def test_build_products_init(self, data: dict):
             # this one is by keyword init, has to use the attribute name
             data["quantity_required"] = data["quantity"]
-            build = builds.BuildProductCreate(**data)
+            build = BuildProductCreate(**data)
             assert all(
                 getattr(build, key) == data[key]
                 for key in ("product_id", "quantity_required")
@@ -374,7 +424,7 @@ class TestBuildModelsUnit:
 
         @given(build_product_in())
         def test_build_products_model(self, data: dict):
-            build = builds.BuildProductCreate.model_validate(data)
+            build = BuildProductCreate.model_validate(data)
             assert build.product_id == data["product_id"]
             assert build.quantity_required == data["quantity"]
 
@@ -384,20 +434,20 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data.keys()))
             data.pop(popped_key)
             with pytest.raises(pydantic.ValidationError):
-                builds.BuildProductCreate.model_validate(data)
+                BuildProductCreate.model_validate(data)
 
         @given(build_product_in())
         def test_build_product_update_init(self, data: dict):
             # this one is by keyword init, has to use the attribute name
             data["quantity_required"] = data["quantity"]
-            build = builds.BuildProductUpdate(**data)
+            build = BuildProductUpdate(**data)
             # only quantity field can be updated
             assert not hasattr(build, "product_id")
             assert build.quantity_required == data["quantity"]
 
         @given(build_product_in())
         def test_build_product_update_model(self, data: dict):
-            build = builds.BuildProductUpdate.model_validate(data)
+            build = BuildProductUpdate.model_validate(data)
             # only quantity field can be updated
             assert not hasattr(build, "product_id")
             assert build.quantity_required == data["quantity"]
@@ -405,11 +455,11 @@ class TestBuildModelsUnit:
         @given(st.integers(max_value=0))
         def test_build_product_update_bad_qty(self, quantity: int):
             with pytest.raises(pydantic.ValidationError):
-                builds.BuildProductUpdate.model_validate({"quantity": quantity})
+                BuildProductUpdate.model_validate({"quantity": quantity})
 
         def test_build_product_update_empty(self):
             with pytest.raises(pydantic.ValidationError):
-                builds.BuildProductUpdate.model_validate({})
+                BuildProductUpdate.model_validate({})
 
     class TestBuildToolsRequest:
         """Collection of tests for the BuildTools model request data model."""
@@ -418,7 +468,7 @@ class TestBuildModelsUnit:
         def test_build_tools_init(self, data: dict):
             # this one is by keyword init, has to use the attribute name
             data["quantity_required"] = data["quantity"]
-            build = builds.BuildToolCreate(**data)
+            build = BuildToolCreate(**data)
             assert all(
                 getattr(build, key) == data[key]
                 for key in ("tool_id", "quantity_required")
@@ -426,7 +476,7 @@ class TestBuildModelsUnit:
 
         @given(build_tool_in())
         def test_build_tools_model(self, data: dict):
-            build = builds.BuildToolCreate.model_validate(data)
+            build = BuildToolCreate.model_validate(data)
             assert build.tool_id == data["tool_id"]
             assert build.quantity_required == data["quantity"]
 
@@ -436,20 +486,20 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data.keys()))
             data.pop(popped_key)
             with pytest.raises(pydantic.ValidationError):
-                builds.BuildToolCreate.model_validate(data)
+                BuildToolCreate.model_validate(data)
 
         @given(build_tool_in())
         def test_build_tool_update_init(self, data: dict):
             # this one is by keyword init, has to use the attribute name
             data["quantity_required"] = data["quantity"]
-            build = builds.BuildToolUpdate(**data)
+            build = BuildToolUpdate(**data)
             # only quantity field can be updated
             assert not hasattr(build, "tool_id")
             assert build.quantity_required == data["quantity"]
 
         @given(build_tool_in())
         def test_build_tool_update_model(self, data: dict):
-            build = builds.BuildToolUpdate.model_validate(data)
+            build = BuildToolUpdate.model_validate(data)
             # only quantity field can be updated
             assert not hasattr(build, "tool_id")
             assert build.quantity_required == data["quantity"]
@@ -457,11 +507,11 @@ class TestBuildModelsUnit:
         @given(st.integers(max_value=0))
         def test_build_tool_update_bad_qty(self, quantity: int):
             with pytest.raises(pydantic.ValidationError):
-                builds.BuildToolUpdate.model_validate({"quantity": quantity})
+                BuildToolUpdate.model_validate({"quantity": quantity})
 
         def test_build_tool_update_empty(self):
             with pytest.raises(pydantic.ValidationError):
-                builds.BuildToolUpdate.model_validate({})
+                BuildToolUpdate.model_validate({})
 
     class TestBuildRelationsSubItemResponse:
         """Tests for the nested data model response for a BuildRelation endpoint."""
@@ -469,12 +519,12 @@ class TestBuildModelsUnit:
         @given(build_sub_product())
         def test_build_sub_product_init(self, data: dict):
             # there are no aliases on this model
-            build = builds.ProductBuildLinkOut(**data)
+            build = ProductBuildLinkOut(**data)
             assert all(getattr(build, key) == data[key] for key in data)
 
         @given(build_sub_product())
         def test_build_sub_product_validate(self, data: dict):
-            build = builds.ProductBuildLinkOut.model_validate(data)
+            build = ProductBuildLinkOut.model_validate(data)
             assert all(getattr(build, key) == data[key] for key in data)
 
         @given(build_sub_product())
@@ -483,13 +533,13 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data.keys()))
             data.pop(popped_key)
             with pytest.raises(pydantic.ValidationError):
-                builds.ProductBuildLinkOut.model_validate(data)
+                ProductBuildLinkOut.model_validate(data)
 
         @given(build_sub_product(), st.integers(max_value=0))
         def test_build_sub_product_bad_qty(self, data: dict, bad_qty: int):
             data["quantity_required"] = bad_qty
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.ProductBuildLinkOut.model_validate(data)
+                ProductBuildLinkOut.model_validate(data)
             assert excinfo.value.errors()[0]["loc"] == ("quantity_required",)
 
         @given(build_sub_product(), ASCII_ST)
@@ -499,19 +549,19 @@ class TestBuildModelsUnit:
                 return
             data["product_type"] = bad_product
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.ProductBuildLinkOut.model_validate(data)
+                ProductBuildLinkOut.model_validate(data)
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == ("product_type",)
 
         @given(build_sub_tool())
         def test_build_sub_tool_init(self, data: dict):
             # there are no aliases on this model
-            build = builds.ToolBuildLinkOut(**data)
+            build = ToolBuildLinkOut(**data)
             assert all(getattr(build, key) == data[key] for key in data)
 
         @given(build_sub_tool())
         def test_build_sub_tool_validate(self, data: dict):
-            build = builds.ToolBuildLinkOut.model_validate(data)
+            build = ToolBuildLinkOut.model_validate(data)
             assert all(getattr(build, key) == data[key] for key in data)
 
         @given(build_sub_tool())
@@ -520,13 +570,13 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data.keys()))
             data.pop(popped_key)
             with pytest.raises(pydantic.ValidationError):
-                builds.ToolBuildLinkOut.model_validate(data)
+                ToolBuildLinkOut.model_validate(data)
 
         @given(build_sub_tool(), st.integers(max_value=0))
         def test_build_sub_tool_bad_qty(self, data: dict, bad_qty: int):
             data["quantity_required"] = bad_qty
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.ToolBuildLinkOut.model_validate(data)
+                ToolBuildLinkOut.model_validate(data)
             assert excinfo.value.errors()[0]["loc"] == ("quantity_required",)
 
     class TestBuildRelationResponse:
@@ -534,7 +584,7 @@ class TestBuildModelsUnit:
 
         @given(build_product_out())
         def test_build_product_init(self, data: dict):
-            build_product = builds.BuildProductFullSingle(**data)
+            build_product = BuildProductFullSingle(**data)
             assert build_product.build_id == data["build_id"]
             assert not hasattr(build_product, "quantity_required")
             assert not hasattr(build_product, "product_id")
@@ -547,7 +597,7 @@ class TestBuildModelsUnit:
 
         @given(build_product_out())
         def test_build_product_model(self, data: dict):
-            build_product = builds.BuildProductFullSingle.model_validate(data)
+            build_product = BuildProductFullSingle.model_validate(data)
             assert build_product.build_id == data["build_id"]
             assert not hasattr(build_product, "quantity_required")
             assert not hasattr(build_product, "product_id")
@@ -581,9 +631,7 @@ class TestBuildModelsUnit:
                 "product": tuple_result,
             }
 
-            build_product = builds.BuildProductFullSingle.model_validate(
-                build_product_data
-            )
+            build_product = BuildProductFullSingle.model_validate(build_product_data)
             assert build_product.build_id == build_id
             assert not hasattr(build_product, "quantity_required")
             assert not hasattr(build_product, "product_id")
@@ -603,7 +651,7 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data))
             data.pop(popped_key)
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildProductFullSingle.model_validate(data)
+                BuildProductFullSingle.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == (popped_key,)
@@ -612,14 +660,14 @@ class TestBuildModelsUnit:
         def test_build_product_bad_build_id(self, data: dict, bad_id: int):
             data["build_id"] = bad_id
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildProductFullSingle.model_validate(data)
+                BuildProductFullSingle.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == ("build_id",)
 
         @given(build_product_all_out())
         def test_build_product_all_init(self, data: dict):
-            build_prod_all = builds.BuildProductFullAll(**data)
+            build_prod_all = BuildProductFullAll(**data)
             assert build_prod_all.build_id == data["build_id"]
             assert not hasattr(build_prod_all, "quantity_required")
             assert not hasattr(build_prod_all, "product_id")
@@ -633,7 +681,7 @@ class TestBuildModelsUnit:
 
         @given(build_product_all_out())
         def test_build_product_all_model(self, data: dict):
-            build_product = builds.BuildProductFullAll.model_validate(data)
+            build_product = BuildProductFullAll.model_validate(data)
             assert build_product.build_id == data["build_id"]
             assert not hasattr(build_product, "quantity_required")
             assert not hasattr(build_product, "product_id")
@@ -656,7 +704,7 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data))
             data.pop(popped_key)
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildProductFullAll.model_validate(data)
+                BuildProductFullAll.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == (popped_key,)
@@ -667,7 +715,7 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data["products"][0]))
             data["products"][0].pop(popped_key)
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildProductFullAll.model_validate(data)
+                BuildProductFullAll.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             # in repr form this "loc" is joined with "."
@@ -678,7 +726,7 @@ class TestBuildModelsUnit:
         def test_build_product_all_bad_build_id(self, data: dict, bad_id: int):
             data["build_id"] = bad_id
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildProductFullAll.model_validate(data)
+                BuildProductFullAll.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == ("build_id",)
@@ -688,7 +736,7 @@ class TestBuildModelsUnit:
         # #########################
         @given(build_tool_out())
         def test_build_tool_init(self, data: dict):
-            build_product = builds.BuildToolFullSingle(**data)
+            build_product = BuildToolFullSingle(**data)
             assert build_product.build_id == data["build_id"]
             assert not hasattr(build_product, "quantity_required")
             assert not hasattr(build_product, "tool_id")
@@ -701,7 +749,7 @@ class TestBuildModelsUnit:
 
         @given(build_tool_out())
         def test_build_tool_model(self, data: dict):
-            build_product = builds.BuildToolFullSingle.model_validate(data)
+            build_product = BuildToolFullSingle.model_validate(data)
             assert build_product.build_id == data["build_id"]
             assert not hasattr(build_product, "quantity_required")
             assert not hasattr(build_product, "tool_id")
@@ -724,7 +772,7 @@ class TestBuildModelsUnit:
             )
             build_tool_data = {"build_id": build_id, "tool": tuple_tool}
 
-            build_tool = builds.BuildToolFullSingle.model_validate(build_tool_data)
+            build_tool = BuildToolFullSingle.model_validate(build_tool_data)
             assert build_tool.build_id == build_id
             assert not hasattr(build_tool, "quantity_required")
             assert not hasattr(build_tool, "tool_id")
@@ -743,7 +791,7 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data))
             data.pop(popped_key)
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildToolFullSingle.model_validate(data)
+                BuildToolFullSingle.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == (popped_key,)
@@ -752,14 +800,14 @@ class TestBuildModelsUnit:
         def test_build_tool_bad_build_id(self, data: dict, bad_id: int):
             data["build_id"] = bad_id
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildToolFullSingle.model_validate(data)
+                BuildToolFullSingle.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == ("build_id",)
 
         @given(build_tool_all_out())
         def test_build_tool_all_init(self, data: dict):
-            build_prod_all = builds.BuildToolFullAll(**data)
+            build_prod_all = BuildToolFullAll(**data)
             assert build_prod_all.build_id == data["build_id"]
             assert not hasattr(build_prod_all, "quantity_required")
             assert not hasattr(build_prod_all, "tool_id")
@@ -773,7 +821,7 @@ class TestBuildModelsUnit:
 
         @given(build_tool_all_out())
         def test_build_tool_all_model(self, data: dict):
-            build_product = builds.BuildToolFullAll.model_validate(data)
+            build_product = BuildToolFullAll.model_validate(data)
             assert build_product.build_id == data["build_id"]
             assert not hasattr(build_product, "quantity_required")
             assert not hasattr(build_product, "tool_id")
@@ -794,7 +842,7 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data))
             data.pop(popped_key)
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildToolFullAll.model_validate(data)
+                BuildToolFullAll.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == (popped_key,)
@@ -805,7 +853,7 @@ class TestBuildModelsUnit:
             popped_key = random.choice(list(data["tools"][0]))
             data["tools"][0].pop(popped_key)
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildToolFullAll.model_validate(data)
+                BuildToolFullAll.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             # in repr form this "loc" is joined with "."
@@ -816,7 +864,7 @@ class TestBuildModelsUnit:
         def test_build_tool_all_bad_build_id(self, data: dict, bad_id: int):
             data["build_id"] = bad_id
             with pytest.raises(pydantic.ValidationError) as excinfo:
-                builds.BuildToolFullAll.model_validate(data)
+                BuildToolFullAll.model_validate(data)
 
             assert excinfo.value.error_count() == 1
             assert excinfo.value.errors()[0]["loc"] == ("build_id",)
@@ -1035,3 +1083,95 @@ class TestBuildRoutesIntegration:
         response_data = response.json()
         assert response_data["detail"][0]["type"] == "missing"
         assert response_data["detail"][0]["loc"] == ["body", "name"]
+
+
+@pytest_asyncio.fixture()
+async def _pre_insert_build_relation_data(
+    setup_db: AsyncSession,
+    single_build: dict,
+    single_product: dict,
+    single_tool: dict,
+    single_build_product: dict,
+    single_build_tool: dict,
+    request: pytest.FixtureRequest,
+):
+    """Ensure for each fixture that Test DB is in preferred state."""
+    marks = {m.name for m in request.node.iter_markers()}
+    if "no_insert" in marks:
+        # no data in the DB
+        return await delete_build_relation_data(setup_db)
+    # at least one record in DB
+    return await insert_build_relation_data(
+        setup_db,
+        [
+            Builds(**single_build),
+            Products(**single_product),
+            Tools(**single_tool),
+            BuildTools(**single_build_tool),
+            BuildProducts(**single_build_product),
+        ],
+    )
+
+
+async def delete_build_relation_data(session: AsyncSession):
+    """Delete the relation data from the DB and return."""
+    async with session.begin():
+        await session.execute(sa.delete(BuildProducts))
+        await session.execute(sa.delete(BuildTools))
+
+
+async def insert_build_relation_data(session: AsyncSession, items: list):
+    """Insert the given Build into the DB and return."""
+    async with session.begin():
+        try:
+            session.add_all(items)
+        except sa_exc.IntegrityError:
+            # build already exists
+            await session.rollback()
+        else:
+            await session.commit()
+
+
+@pytest.mark.usefixtures("_pre_insert_build_relation_data")
+class TestBuildRelationRoutesIntegration:
+    """Collection of tests for API routes regarding Build relations."""
+
+    @pytest.mark.asyncio()
+    class TestAsyncs:
+        """Collection of methods that need Async DB connection."""
+
+        @pytest.mark.no_insert()
+        @pytest.mark.usefixtures("setup_db")
+        async def test_get_no_build_parts(
+            self, test_client: TestClient, test_engine: AsyncEngine, single_build: dict
+        ):
+            """Test that GET returns a list with no items when no build parts exist."""
+            async with test_engine.begin() as conn:
+                await conn.execute(sa.insert(Builds).values(**single_build))
+                # auto commit
+
+            response = test_client.get(f"/builds/{single_build['build_id']}/products")
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["build_id"] == single_build["build_id"]
+            assert response_data["products"] == []
+
+    @pytest.mark.no_insert()
+    @pytest.mark.usefixtures("setup_db")
+    def test_get_error_build_parts(self, test_client: TestClient):
+        """Test that GET returns error if build_id doesn't exist."""
+        response = test_client.get("/builds/1/products")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["detail"] == "Build not found"
+
+    def test_get_build_parts_all(self, test_client: TestClient):
+        response = test_client.get("/builds/1/products")
+        assert response.status_code == status.HTTP_200_OK
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["build_id"] == 1
+        assert isinstance(response_data["products"], list)
+        assert len(response_data["products"]) >= 1
