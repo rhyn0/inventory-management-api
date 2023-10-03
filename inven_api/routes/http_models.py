@@ -13,7 +13,7 @@ class BuildRelationBase(BaseModel):
     """Model that defines the information needed to link a build to another table."""
 
     # validation alias since field name is not JSON like
-    quantity_required: int = Field(gt=0, validation_alias="quantity")
+    quantity_required: int = Field(gt=0)
 
 
 class BuildRelationUpdateBase(BaseModel):
@@ -25,7 +25,7 @@ class BuildRelationUpdateBase(BaseModel):
     """
 
     # only quantity since product_id is not updatable
-    quantity_required: int = Field(gt=0, validation_alias="quantity")
+    quantity_required: int = Field(gt=0)
 
 
 class BuildRelationFullBase(BaseModel):

@@ -178,7 +178,9 @@ async def delete_build_part_for_id(
     }
 
 
-@BUILD_PROD_ROUTER.post(path="", response_model=BuildProductFullSingle)
+@BUILD_PROD_ROUTER.post(
+    path="", response_model=BuildProductFullSingle, status_code=status.HTTP_201_CREATED
+)
 async def add_buildpart_to_build(
     build_id: int, new_part: Annotated[BuildProductCreate, Body()], session: DatabaseDep
 ):
@@ -189,31 +191,38 @@ async def add_buildpart_to_build(
     """
     # TODO: make a general new build with products endpoint
     # now get the product information
-    prod_result = session.scalars(
-        select(Products).where(Products.product_id == new_part.product_id)
-    )
-    build_result = session.scalars(select(Builds).where(Builds.build_id == build_id))
-    linked_product = (await prod_result).one_or_none()
-    if linked_product is None:
-        # have to close outstanding tasks if we won't await them
-        build_result.close()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
+    # using session.scalars auto creates a BEGIN, so let's make that explicit
+    async with session.begin():
+        prod_result = session.scalars(
+            select(Products).where(Products.product_id == new_part.product_id)
         )
-    # different message for each condition
-    linked_build = (await build_result).one_or_none()
-    if linked_build is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Build not found"
+        build_result = session.scalars(
+            select(Builds).where(Builds.build_id == build_id)
         )
+        linked_product = (await prod_result).one_or_none()
+        if linked_product is None:
+            # have to close outstanding tasks if we won't await them
+            build_result.close()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
+            )
+        # different message for each condition
+        linked_build = (await build_result).one_or_none()
+        if linked_build is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Build not found"
+            )
+        # auto commit
     added_obj = BuildProducts(build_id=build_id, **new_part.model_dump())
     async with session.begin():
         session.add(added_obj)
         await session.commit()
     return {
         "build_id": build_id,
-        "quantity_required": new_part.quantity_required,
-        "product": linked_product,
+        "product": {
+            **linked_product.__dict__,
+            "quantity_required": new_part.quantity_required,
+        },
     }
 
 
@@ -251,6 +260,8 @@ async def update_buildpart_for_build(
 
     return {
         "build_id": build_id,
-        "quantity_required": new_part.quantity_required,
-        "product": (await product_result).one(),
+        "product": {
+            **(await product_result).one().__dict__,
+            "quantity_required": new_part.quantity_required,
+        },
     }

@@ -116,7 +116,7 @@ def build_product_in(draw: st.DrawFn):
     """
     return {
         "product_id": draw(st.integers(min_value=1)),
-        "quantity": draw(st.integers(min_value=1)),
+        "quantity_required": draw(st.integers(min_value=1)),
     }
 
 
@@ -128,7 +128,7 @@ def build_tool_in(draw: st.DrawFn):
     """
     return {
         "tool_id": draw(st.integers(min_value=1)),
-        "quantity": draw(st.integers(min_value=1)),
+        "quantity_required": draw(st.integers(min_value=1)),
     }
 
 
@@ -415,7 +415,6 @@ class TestBuildModelsUnit:
         @given(build_product_in())
         def test_build_products_init(self, data: dict):
             # this one is by keyword init, has to use the attribute name
-            data["quantity_required"] = data["quantity"]
             build = BuildProductCreate(**data)
             assert all(
                 getattr(build, key) == data[key]
@@ -426,7 +425,7 @@ class TestBuildModelsUnit:
         def test_build_products_model(self, data: dict):
             build = BuildProductCreate.model_validate(data)
             assert build.product_id == data["product_id"]
-            assert build.quantity_required == data["quantity"]
+            assert build.quantity_required == data["quantity_required"]
 
         @given(build_product_in())
         def test_build_products_missing_attr(self, data: dict):
@@ -439,18 +438,17 @@ class TestBuildModelsUnit:
         @given(build_product_in())
         def test_build_product_update_init(self, data: dict):
             # this one is by keyword init, has to use the attribute name
-            data["quantity_required"] = data["quantity"]
             build = BuildProductUpdate(**data)
             # only quantity field can be updated
             assert not hasattr(build, "product_id")
-            assert build.quantity_required == data["quantity"]
+            assert build.quantity_required == data["quantity_required"]
 
         @given(build_product_in())
         def test_build_product_update_model(self, data: dict):
             build = BuildProductUpdate.model_validate(data)
             # only quantity field can be updated
             assert not hasattr(build, "product_id")
-            assert build.quantity_required == data["quantity"]
+            assert build.quantity_required == data["quantity_required"]
 
         @given(st.integers(max_value=0))
         def test_build_product_update_bad_qty(self, quantity: int):
@@ -467,7 +465,6 @@ class TestBuildModelsUnit:
         @given(build_tool_in())
         def test_build_tools_init(self, data: dict):
             # this one is by keyword init, has to use the attribute name
-            data["quantity_required"] = data["quantity"]
             build = BuildToolCreate(**data)
             assert all(
                 getattr(build, key) == data[key]
@@ -478,7 +475,7 @@ class TestBuildModelsUnit:
         def test_build_tools_model(self, data: dict):
             build = BuildToolCreate.model_validate(data)
             assert build.tool_id == data["tool_id"]
-            assert build.quantity_required == data["quantity"]
+            assert build.quantity_required == data["quantity_required"]
 
         @given(build_tool_in())
         def test_build_tools_missing_attr(self, data: dict):
@@ -491,18 +488,17 @@ class TestBuildModelsUnit:
         @given(build_tool_in())
         def test_build_tool_update_init(self, data: dict):
             # this one is by keyword init, has to use the attribute name
-            data["quantity_required"] = data["quantity"]
             build = BuildToolUpdate(**data)
             # only quantity field can be updated
             assert not hasattr(build, "tool_id")
-            assert build.quantity_required == data["quantity"]
+            assert build.quantity_required == data["quantity_required"]
 
         @given(build_tool_in())
         def test_build_tool_update_model(self, data: dict):
             build = BuildToolUpdate.model_validate(data)
             # only quantity field can be updated
             assert not hasattr(build, "tool_id")
-            assert build.quantity_required == data["quantity"]
+            assert build.quantity_required == data["quantity_required"]
 
         @given(st.integers(max_value=0))
         def test_build_tool_update_bad_qty(self, quantity: int):
@@ -618,7 +614,7 @@ class TestBuildModelsUnit:
             quantity_reqd = data.pop("quantity_required")
             # this product quantity is about the inventory state, not about the build
             data["quantity"] = 0
-            product = builds.Products(**data, vendor=new_vendor)
+            product = Products(**data, vendor=new_vendor)
             tuple_result = NamedProductResult(
                 product.product_id,
                 product.name,
@@ -766,7 +762,7 @@ class TestBuildModelsUnit:
             # quantity must be renamed again
             qty_required = data.pop("quantity_required")
             # this tool quantity is about the inventory state, not about the build
-            tool = builds.Tools(**data, total_owned=1, total_avail=0)
+            tool = Tools(**data, total_owned=1, total_avail=0)
             tuple_tool = NamedToolResult(
                 tool.tool_id, tool.name, tool.vendor, qty_required
             )
@@ -1097,20 +1093,24 @@ async def _pre_insert_build_relation_data(
 ):
     """Ensure for each fixture that Test DB is in preferred state."""
     marks = {m.name for m in request.node.iter_markers()}
-    if "no_insert" in marks:
+    if "no_insert" not in marks:
+        # at least one record in DB
+        await insert_build_relation_data(
+            setup_db,
+            [
+                Builds(**single_build),
+                Products(**single_product),
+                Tools(**single_tool),
+                BuildTools(**single_build_tool),
+                BuildProducts(**single_build_product),
+            ],
+        )
+        yield
+        await delete_build_relation_data(setup_db)
+    else:
         # no data in the DB
-        return await delete_build_relation_data(setup_db)
-    # at least one record in DB
-    return await insert_build_relation_data(
-        setup_db,
-        [
-            Builds(**single_build),
-            Products(**single_product),
-            Tools(**single_tool),
-            BuildTools(**single_build_tool),
-            BuildProducts(**single_build_product),
-        ],
-    )
+        await delete_build_relation_data(setup_db)
+        yield
 
 
 async def delete_build_relation_data(session: AsyncSession):
@@ -1118,18 +1118,22 @@ async def delete_build_relation_data(session: AsyncSession):
     async with session.begin():
         await session.execute(sa.delete(BuildProducts))
         await session.execute(sa.delete(BuildTools))
+        await session.execute(sa.delete(Products))
+        await session.execute(sa.delete(Tools))
+        await session.execute(sa.delete(Builds))
 
 
 async def insert_build_relation_data(session: AsyncSession, items: list):
     """Insert the given Build into the DB and return."""
     async with session.begin():
-        try:
-            session.add_all(items)
-        except sa_exc.IntegrityError:
-            # build already exists
-            await session.rollback()
-        else:
-            await session.commit()
+        for item in items:
+            async with session.begin_nested():
+                try:
+                    await session.merge(item)
+                except sa_exc.IntegrityError:
+                    # build already exists
+                    await session.rollback()
+        await session.commit()
 
 
 @pytest.mark.usefixtures("_pre_insert_build_relation_data")
@@ -1142,7 +1146,7 @@ class TestBuildRelationRoutesIntegration:
 
         @pytest.mark.no_insert()
         @pytest.mark.usefixtures("setup_db")
-        async def test_get_no_build_parts(
+        async def test_get_no_build_products(
             self, test_client: TestClient, test_engine: AsyncEngine, single_build: dict
         ):
             """Test that GET returns a list with no items when no build parts exist."""
@@ -1157,9 +1161,89 @@ class TestBuildRelationRoutesIntegration:
             assert response_data["build_id"] == single_build["build_id"]
             assert response_data["products"] == []
 
+        async def test_create_build_product(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            single_build_product: dict,
+            request: pytest.FixtureRequest,
+        ):
+            """Test that POST works for creating a BuildProduct."""
+            async with test_engine.begin() as conn:
+                # first delete the existing BuildProduct
+                delete_result = await conn.execute(
+                    sa.delete(BuildProducts)
+                    .where(
+                        BuildProducts.build_id == single_build_product["build_id"],
+                        BuildProducts.product_id == single_build_product["product_id"],
+                    )
+                    .returning(BuildProducts.build_id, BuildProducts.product_id)
+                )
+            assert len(delete_result.all()) == 1
+
+            response = test_client.post(
+                f"/builds/{single_build_product['build_id']}/products",
+                json=single_build_product,
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["build_id"] == single_build_product["build_id"]
+            assert isinstance(response_data["product"], dict)
+            assert (
+                response_data["product"]["product_id"]
+                == single_build_product["product_id"]
+            )
+            assert (
+                response_data["product"]["quantity_required"]
+                == single_build_product["quantity_required"]
+            )
+
+        @given(st.integers(min_value=1, max_value=100_000))
+        async def test_update_build_product_quantity(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            single_build_product: dict,
+            qty: int,
+        ):
+            """Test that PUT works for updating a BuildProduct quantity required.
+
+            Check the database before and after to make sure the quantity is updated.
+            """
+            database_statement = sa.select(BuildProducts.quantity_required).where(
+                BuildProducts.build_id == single_build_product["build_id"],
+                BuildProducts.product_id == single_build_product["product_id"],
+            )
+            async with test_engine.connect() as conn:
+                prev_result = await conn.execute(database_statement)
+                prev_qty = prev_result.scalar_one()
+
+            response = test_client.put(
+                f"/builds/{single_build_product['build_id']}/products/{single_build_product['product_id']}",
+                json={"quantity_required": qty},
+            )
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["build_id"] == single_build_product["build_id"]
+            assert (
+                response_data["product"]["product_id"]
+                == single_build_product["product_id"]
+            )
+            if prev_qty != qty:
+                # funky condition when the generated qty == prev_qty
+                assert prev_qty != response_data["product"]["quantity_required"]
+            assert qty == response_data["product"]["quantity_required"]
+
+            # check database to make sure the new qty is there
+            async with test_engine.connect() as conn:
+                after_result = await conn.execute(database_statement)
+            assert after_result.scalar_one() == qty
+
     @pytest.mark.no_insert()
     @pytest.mark.usefixtures("setup_db")
-    def test_get_error_build_parts(self, test_client: TestClient):
+    def test_get_error_build_prodcuts(self, test_client: TestClient):
         """Test that GET returns error if build_id doesn't exist."""
         response = test_client.get("/builds/1/products")
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -1167,7 +1251,7 @@ class TestBuildRelationRoutesIntegration:
         assert isinstance(response_data, dict)
         assert response_data["detail"] == "Build not found"
 
-    def test_get_build_parts_all(self, test_client: TestClient):
+    def test_get_build_products_all(self, test_client: TestClient):
         response = test_client.get("/builds/1/products")
         assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
@@ -1175,3 +1259,132 @@ class TestBuildRelationRoutesIntegration:
         assert response_data["build_id"] == 1
         assert isinstance(response_data["products"], list)
         assert len(response_data["products"]) >= 1
+        assert all(
+            isinstance(product, dict)
+            and all(
+                key in product
+                for key in (
+                    "product_id",
+                    "name",
+                    "vendor_sku",
+                    "product_type",
+                    "quantity_required",
+                )
+            )
+            for product in response_data["products"]
+        )
+
+    def test_get_build_products_by_id(self, test_client: TestClient):
+        """Test that we get the correct BuildProduct by ID.
+
+        Default _pre_insert function puts in build_id 1 and product_id 1.
+        """
+        response = test_client.get("/builds/1/products/1")
+        assert response.status_code == status.HTTP_200_OK
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["build_id"] == 1
+        assert isinstance(response_data["product"], dict)
+        assert all(
+            key in response_data["product"]
+            for key in (
+                "product_id",
+                "name",
+                "vendor_sku",
+                "product_type",
+                "quantity_required",
+            )
+        )
+
+    def test_get_build_products_by_id_producterror(self, test_client: TestClient):
+        """Test that we get an error for requesting a nonexistent BuildProduct.
+
+        Default _pre_insert function puts in build_id 1 and product_id 1.
+        """
+        response = test_client.get("/builds/1/products/-1")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert response_data["detail"] == "Build Product pair not found"
+
+    def test_get_build_products_by_id_builderror(self, test_client: TestClient):
+        """Test that we get an error for requesting a nonexistent BuildProduct.
+
+        Default _pre_insert function puts in build_id 1 and product_id 1.
+        """
+        response = test_client.get("/builds/-1/products/1")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert response_data["detail"] == "Build Product pair not found"
+
+    def test_delete_build_products(self, test_client: TestClient, single_product: dict):
+        """Test that we can delete a BuildProduct.
+
+        Default _pre_insert function puts in build_id 1 and product_id 1.
+        """
+        response = test_client.get("/builds/1/products/1")
+        assert response.status_code == status.HTTP_200_OK
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["build_id"] == 1
+        assert isinstance(response_data["product"], dict)
+        assert all(
+            response_data["product"][key] == single_product[key]
+            for key in response_data["product"]
+            if key != "quantity_required"
+        )
+
+    def test_delete_build_products_bad_prod(self, test_client: TestClient):
+        """Test that we get an error when deleting a nonexistent BuildProduct.
+
+        Default _pre_insert function puts in build_id 1 and product_id 1.
+        """
+        response = test_client.get("/builds/1/products/-1")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["detail"] == "Build Product pair not found"
+
+    def test_delete_build_products_bad_build(self, test_client: TestClient):
+        """Test that we get an error when deleting a nonexistent BuildProduct.
+
+        Default _pre_insert function puts in build_id 1 and product_id 1.
+        """
+        response = test_client.get("/builds/-1/products/1")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["detail"] == "Build Product pair not found"
+
+    @given(st.integers(min_value=-SQLITE_MAX_INT, max_value=0))
+    def test_post_build_products_bad_build(
+        self, test_client: TestClient, single_build_product: dict, bad_id: int
+    ):
+        """Test that we get an error when deleting a nonexistent BuildProduct.
+
+        Default _pre_insert function puts in build_id 1 and product_id 1.
+        """
+        response = test_client.post(
+            f"/builds/{bad_id}/products/", json=single_build_product
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["detail"] == "Build not found"
+
+    @given(st.integers(min_value=-SQLITE_MAX_INT, max_value=0))
+    def test_post_build_products_bad_product(
+        self, test_client: TestClient, single_build_product: dict, bad_id: int
+    ):
+        """Test that we get an error when deleting a nonexistent BuildProduct.
+
+        Default _pre_insert function puts in build_id 1 and product_id 1.
+        """
+        build_product_new = {**single_build_product, "product_id": bad_id}
+        response = test_client.post(
+            f"/builds/{single_build_product['build_id']}/products/",
+            json=build_product_new,
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["detail"] == "Product not found"
