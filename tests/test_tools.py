@@ -63,12 +63,25 @@ async def insert_tool_data(session: AsyncSession, tool_data: dict):
 
 @pytest.fixture(scope="session")
 def tool_data() -> dict:
+    """Example tool request body."""
     return {
         "name": "Test Tool",
         "vendor": "Test Vendor",
         "total_owned": 10,
-        "total_avail": 10,
+        "total_avail": 9,
     }
+
+
+@pytest.fixture(scope="session")
+def tool_orm_data(tool_data: dict) -> Tools:
+    """Default object of what a Tools record could be like in DB."""
+    return Tools(
+        tool_id=1,
+        name=tool_data["name"],
+        vendor=tool_data["vendor"],
+        total_owned=tool_data["total_owned"],
+        total_avail=tool_data["total_avail"],
+    )
 
 
 @pytest.fixture(scope="module")
@@ -160,43 +173,31 @@ class TestAtomicReturnDataUnit:
         assert "total_avail" not in post_update
         assert post_update["postTotalAvail"] == post_total_avail
 
-    def test_pre_atomic_update_row(self):
-        """Test that the pre-atomic update object can be instantiated from a row"""
-        pre_update = tools.ToolPreAtomicUpdate.model_validate(
-            Tools(
-                tool_id=1,
-                name="Test Tool",
-                vendor="Test Vendor",
-                total_owned=10,
-                total_avail=10,
-            )
-        ).model_dump(by_alias=True)
+    def test_pre_atomic_update_row(self, tool_orm_data: Tools):
+        """Test that the pre-atomic update object can be instantiated from a row."""
+        pre_update = tools.ToolPreAtomicUpdate.model_validate(tool_orm_data).model_dump(
+            by_alias=True
+        )
         # This by_alias is necessary because of the serialization_alias
         # when used in FastAPI, the method receives response_model_by_alias=True
-        assert pre_update["tool_id"] == 1
+        assert pre_update["tool_id"] == tool_orm_data.tool_id
         assert "total_owned" not in pre_update
-        assert pre_update["preTotalOwned"] == 10
+        assert pre_update["preTotalOwned"] == tool_orm_data.total_owned
         assert "total_avail" not in pre_update
-        assert pre_update["preTotalAvail"] == 10
+        assert pre_update["preTotalAvail"] == tool_orm_data.total_avail
 
-    def test_post_atomic_update_row(self):
-        """Test that the pre-atomic update object can be instantiated from a row"""
+    def test_post_atomic_update_row(self, tool_orm_data: Tools):
+        """Test that the pre-atomic update object can be instantiated from a row."""
         post_update = tools.ToolPostAtomicUpdate.model_validate(
-            Tools(
-                tool_id=1,
-                name="Test Tool",
-                vendor="Test Vendor",
-                total_owned=10,
-                total_avail=10,
-            )
+            tool_orm_data
         ).model_dump(by_alias=True)
         # This by_alias is necessary because of the serialization_alias
         # when used in FastAPI, the method receives response_model_by_alias=True
-        assert post_update["tool_id"] == 1
+        assert post_update["tool_id"] == tool_orm_data.tool_id
         assert "total_owned" not in post_update
-        assert post_update["postTotalOwned"] == 10
+        assert post_update["postTotalOwned"] == tool_orm_data.total_owned
         assert "total_avail" not in post_update
-        assert post_update["postTotalAvail"] == 10
+        assert post_update["postTotalAvail"] == tool_orm_data.total_avail
 
 
 class TestUpdatePathEnumUnit:
@@ -217,7 +218,8 @@ class TestToolUpdateUnit:
     """Unit tests for the request body parsing object for updating a tool.
 
     This body would parse it when calling with data:
-        curl -X PUT -H "Content-Type: application/json" /tools/{tool_id} -d '{"owned": 10, "avail": 10}'
+        curl -X PUT -H "Content-Type: application/json" /tools/{tool_id} \
+            -d '{"owned": 10, "avail": 10}'
     """
 
     serialized_owned_field = "total_owned"
@@ -308,7 +310,7 @@ class TestToolRoutesIntegration:
         """Test that we can get no tools."""
         # no data inserted so
         response = test_client.get("/tools")
-        assert response.status_code == 200
+        assert response.status_code == status.HTTP_200_OK
         assert response.json() == []
 
     async def test_get_all_tools(self, test_client: TestClient):
@@ -317,7 +319,7 @@ class TestToolRoutesIntegration:
         Only one in this case.
         """
         response = test_client.get("/tools")
-        assert response.status_code == 200
+        assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
         assert isinstance(response_data, list)
         assert len(response_data) == 1
@@ -346,8 +348,10 @@ class TestToolRoutesIntegration:
                 new_tool["name"] = f"Hammer {i}"
                 await insert_tool_data(conn, new_tool)  # type: ignore
             await conn.commit()
-        # now our lovely new hammers are in the db, lets get them by this particular vendor
-        # this get all endpoint is paginated, so we need to make page size equal to our entries
+        # now our lovely new hammers are in the db
+        # lets get them by this particular vendor
+        # this get all endpoint is paginated
+        # so we need to make page size equal to our entries
         response = test_client.get(
             f"/tools?vendor={new_vendor_name}&page_size={new_tools_inserted}"
         )
@@ -361,7 +365,7 @@ class TestToolRoutesIntegration:
         )
         # clean out these new tools
         async with test_engine.begin() as conn:
-            result = await conn.execute(
+            await conn.execute(
                 text(
                     """DELETE FROM inventory.tools
                     WHERE vendor = :vendor
@@ -389,7 +393,7 @@ class TestToolRoutesIntegration:
         """Test that we can get a tool by its id."""
         response = test_client.get(f"/tools/{example_tool}")
         print(response.json())
-        assert response.status_code == 200
+        assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
         assert isinstance(response_data, dict)
         assert self.full_tool_fields_present(response_data)
@@ -415,7 +419,8 @@ class TestToolRoutesIntegration:
         # verify that a tool still exists
         async with test_engine.connect() as conn:
             result = await conn.execute(text("SELECT * FROM inventory.tools"))
-            # result.rowcount is not useful in SQLAlchemy 2.0 except for in DELETE or UPDATE
+            # result.rowcount is not useful in SQLAlchemy 2.0
+            # except for in DELETE or UPDATE
             assert len(result.fetchall()) > 0
 
     async def test_delete_tool(self, test_engine: AsyncEngine, test_client: TestClient):
@@ -431,7 +436,7 @@ class TestToolRoutesIntegration:
         print(f"found {tool_id=}")
         response = test_client.delete(f"/tools/{tool_id}")
 
-        assert response.status_code == 200
+        assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
         # returns the object that was in the database
         assert isinstance(response_data, dict)
@@ -497,7 +502,8 @@ class TestToolRoutesIntegration:
     ):
         """Test that we get a 400 if we try to update a tool_id route with invalid data.
 
-        The quantity owned must always be greater than or equal to the quantity available.
+        The quantity owned must always be
+        greater than or equal to the quantity available.
         So we should get an error if we try to break this on purpose.
         """
         # obtain a tool_id
@@ -538,7 +544,10 @@ class TestToolRoutesIntegration:
     async def test_post_atomic_update_incr(
         self, test_engine: AsyncEngine, test_client: TestClient, qty: int
     ):
-        """Test that we can update a tool's owned quantity and then get the new value."""
+        """Test that we can update a tool's owned quantity and then get the new value.
+
+        Check database before and after.
+        """
         # obtain a tool_id
         async with test_engine.connect() as conn:
             result = await conn.execute(
@@ -561,7 +570,7 @@ class TestToolRoutesIntegration:
     async def test_post_atomic_update_decr(
         self, test_engine: AsyncEngine, test_client: TestClient
     ):
-        """Test that we can update a tool's owned quantity and then get the new value."""
+        """Test that update a tool's owned quantity and then get the new value."""
         # obtain a tool_id
         async with test_engine.connect() as conn:
             result = await conn.execute(
@@ -588,7 +597,7 @@ class TestToolRoutesIntegration:
     async def test_pre_atomic_update_incr(
         self, test_engine: AsyncEngine, test_client: TestClient, qty: int
     ):
-        """Test that we can update a tool's owned quantity and then get the new value."""
+        """Test that update a tool's owned quantity and then get the new value."""
         # obtain a tool_id
         async with test_engine.connect() as conn:
             result = await conn.execute(
@@ -621,9 +630,8 @@ class TestToolRoutesIntegration:
         assert new_avail_qty == tool_avail_qty
 
     @given(st.integers(min_value=1))
-    async def test_pre_atomic_update_bad_id(
+    def test_pre_atomic_update_bad_id(
         self,
-        test_engine: AsyncEngine,
         test_client: TestClient,
         qty: int,
     ):

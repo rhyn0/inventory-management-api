@@ -26,6 +26,7 @@ from inven_api.routes import products
 
 from .setup_deps import db_sessions
 from .setup_deps import event_loop
+from .setup_deps import product_type_strategy
 from .setup_deps import request_headers
 from .setup_deps import setup_db
 from .setup_deps import sqlite_schema_file
@@ -40,12 +41,6 @@ def attrs_present(product_model: products.ProductBase) -> bool:
         getattr(product_model, attr) is not None
         for attr in products.ProductBase.model_fields
     )
-
-
-@st.composite
-def product_type_strategy(draw):
-    """Strategy to randomly draw a ProductType."""
-    return draw(st.sampled_from(products.ProductTypes))
 
 
 @st.composite

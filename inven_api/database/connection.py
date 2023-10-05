@@ -40,5 +40,6 @@ def get_engine(
             port=int(port),
             database=dbname,
             query=kwargs,  # type: ignore
-        )
+        ),
+        echo=True,
     )

@@ -1,6 +1,7 @@
 """This file stores all relevant information on the PostgreSQL tables."""
 # Standard Library
 from datetime import datetime
+from enum import EnumMeta
 from enum import StrEnum
 
 # External Party
@@ -13,10 +14,39 @@ from sqlalchemy.dialects.postgresql import VARCHAR
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import relationship
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 
-class ProductTypes(StrEnum):
+class EnumMetaContains(EnumMeta):
+    """Metaclass for Enum that allows for checking if a value is in the Enum."""
+
+    def __contains__(mcls, item) -> bool:  # noqa: N805
+        """Check if item is in cls.
+
+        Not using self since this is a metaclass.
+        mcls is the implementing class.
+
+        Args:
+            item: item to check
+
+        Returns:
+            bool: True if item is in cls
+        """
+        try:
+            mcls(item)
+        except ValueError:
+            return False
+        return True
+
+
+class StrEnumContainsMix(StrEnum, metaclass=EnumMetaContains):
+    """Mix together the member attributes of StrEnum and the meta's contain methods."""
+
+    pass  # noqa: PIE790
+
+
+class ProductTypes(StrEnumContainsMix):
     """Enumerate all possible Product Types."""
 
     PART = "part"  # e.g. nails
@@ -72,6 +102,10 @@ class Products(InventoryBase):
         TIMESTAMP, server_default=func.now(), onupdate=func.now()
     )
 
+    build_products_products: Mapped[list["BuildProducts"]] = relationship(
+        back_populates="parent_product",
+    )
+
     def __repr__(self) -> str:  # noqa: D105
         return self._repr(
             id=self.product_id, name=self.name, vendor_sku=self.vendor_sku
@@ -101,6 +135,10 @@ class Tools(InventoryBase):
         default=0,
     )
 
+    build_tools_tools: Mapped[list["BuildTools"]] = relationship(
+        back_populates="parent_tool",
+    )
+
     def __repr__(self) -> str:  # noqa: D105
         return self._repr(
             id=self.tool_id,
@@ -119,17 +157,24 @@ class Builds(InventoryBase):
     name: Mapped[str] = mapped_column(TEXT)
     sku: Mapped[str] = mapped_column(TEXT, unique=True)
 
+    build_products: Mapped[list["BuildProducts"]] = relationship(
+        back_populates="parent_build_product"
+    )
+    build_tools: Mapped[list["BuildTools"]] = relationship(
+        back_populates="parent_build_tool"
+    )
+
     def __repr__(self) -> str:  # noqa: D105
         return self._repr(id=self.build_id, name=self.name, sku=self.sku)
 
 
-class BuildParts(InventoryBase):
+class BuildProducts(InventoryBase):
     """Model of intersection between Build and Product.
 
     Contains the products necessary to complete a build.
     """
 
-    __tablename__ = "build_parts"
+    __tablename__ = "build_products"
 
     __table_args__ = (sa.PrimaryKeyConstraint("product_id", "build_id"),)
 
@@ -139,7 +184,18 @@ class BuildParts(InventoryBase):
     build_id: Mapped[int] = mapped_column(
         sa.ForeignKey(Builds.build_id, ondelete="CASCADE")
     )
-    quantity_required: Mapped[int]
+    quantity_required: Mapped[int] = mapped_column(
+        # must be greater than 0, can't build with 0 of a product
+        # would just unlink the dependency then
+        sa.CheckConstraint("quantity_required > 0")
+    )
+
+    parent_build_product: Mapped["Builds"] = relationship(
+        back_populates="build_products",
+    )
+    parent_product: Mapped["Products"] = relationship(
+        back_populates="build_products_products",
+    )
 
     def __repr__(self) -> str:  # noqa: D105
         return self._repr(
@@ -165,7 +221,16 @@ class BuildTools(InventoryBase):
     build_id: Mapped[int] = mapped_column(
         sa.ForeignKey(Builds.build_id, ondelete="CASCADE")
     )
-    quantity_required: Mapped[int]
+    quantity_required: Mapped[int] = mapped_column(
+        sa.CheckConstraint("quantity_required > 0")
+    )
+
+    parent_build_tool: Mapped["Builds"] = relationship(
+        back_populates="build_tools",
+    )
+    parent_tool: Mapped["Tools"] = relationship(
+        back_populates="build_tools_tools",
+    )
 
     def __repr__(self) -> str:  # noqa: D105
         return self._repr(
