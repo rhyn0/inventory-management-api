@@ -1241,6 +1241,109 @@ class TestBuildRelationRoutesIntegration:
                 after_result = await conn.execute(database_statement)
             assert after_result.scalar_one() == qty
 
+        async def test_get_build_tools_no_tools(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            single_build_tool: dict,
+        ):
+            """Test behavior for when there are no BuildTools for a Build.
+
+            First delete all linked build tools from initial build_tool fixture.
+            """
+            async with test_engine.begin() as conn:
+                await conn.execute(
+                    sa.delete(BuildTools).where(
+                        BuildTools.build_id == single_build_tool["build_id"],
+                    )
+                )
+
+            response = test_client.get(f"/builds/{single_build_tool['build_id']}/tools")
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["build_id"] == single_build_tool["build_id"]
+            assert response_data["tools"] == []
+
+        async def test_post_build_tools(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            single_build_tool: dict,
+        ):
+            """Test POST for creating a BuildTool."""
+            # remove it from DB first
+            # test that it made it into the DB
+            async with test_engine.begin() as conn:
+                await conn.execute(
+                    sa.delete(BuildTools).where(
+                        BuildTools.build_id == single_build_tool["build_id"],
+                        BuildTools.tool_id == single_build_tool["tool_id"],
+                    )
+                )
+                # auto commit
+            response = test_client.post(
+                f"/builds/{single_build_tool['build_id']}/tools", json=single_build_tool
+            )
+
+            assert response.status_code == status.HTTP_201_CREATED
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["build_id"] == single_build_tool["build_id"]
+            assert isinstance(response_data["tool"], dict)
+            assert response_data["tool"]["tool_id"] == single_build_tool["tool_id"]
+            assert (
+                response_data["tool"]["quantity_required"]
+                == single_build_tool["quantity_required"]
+            )
+
+            # test that it made it into the DB
+            async with test_engine.connect() as conn:
+                result = await conn.execute(
+                    sa.select(BuildTools).where(
+                        BuildTools.build_id == single_build_tool["build_id"],
+                        BuildTools.tool_id == single_build_tool["tool_id"],
+                    )
+                )
+            results = result.all()
+            assert len(results) == 1
+            assert (
+                results[0].quantity_required == single_build_tool["quantity_required"]
+            )
+
+        @given(st.integers(min_value=1, max_value=SQLITE_MAX_INT))
+        async def test_put_build_tools(
+            self,
+            test_client: TestClient,
+            test_engine: AsyncEngine,
+            single_build_tool: dict,
+            new_qty: int,
+        ):
+            """Test PUT for updating a BuildTool."""
+            response = test_client.put(
+                f"/builds/{single_build_tool['build_id']}/tools/{single_build_tool['tool_id']}",
+                json={"quantity_required": new_qty},
+            )
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert isinstance(response_data, dict)
+            assert response_data["build_id"] == single_build_tool["build_id"]
+            assert isinstance(response_data["tool"], dict)
+            assert response_data["tool"]["tool_id"] == single_build_tool["tool_id"]
+            assert "quantity_required" not in response_data
+            assert response_data["tool"]["quantity_required"] == new_qty
+
+            # test that it made it into the DB
+            async with test_engine.connect() as conn:
+                result = await conn.execute(
+                    sa.select(BuildTools.quantity_required).where(
+                        BuildTools.build_id == single_build_tool["build_id"],
+                        BuildTools.tool_id == single_build_tool["tool_id"],
+                    )
+                )
+                database_qty = result.scalar_one()
+            assert database_qty == new_qty
+
     @pytest.mark.no_insert()
     @pytest.mark.usefixtures("setup_db")
     def test_get_error_build_prodcuts(self, test_client: TestClient):
@@ -1388,3 +1491,105 @@ class TestBuildRelationRoutesIntegration:
         response_data = response.json()
         assert isinstance(response_data, dict)
         assert response_data["detail"] == "Product not found"
+
+    def test_get_build_tools_all(self, test_client: TestClient):
+        response = test_client.get("/builds/1/tools")
+        assert response.status_code == status.HTTP_200_OK
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["build_id"] == 1
+        assert isinstance(response_data["tools"], list)
+        assert len(response_data["tools"]) >= 1
+        assert all(
+            isinstance(tool, dict)
+            and all(
+                key in tool
+                for key in (
+                    "tool_id",
+                    "name",
+                    "vendor",
+                    "quantity_required",
+                )
+            )
+            for tool in response_data["tools"]
+        )
+
+    @given(st.integers(min_value=1, max_value=SQLITE_MAX_INT))
+    @pytest.mark.no_insert()
+    @pytest.mark.usefixtures("setup_db")
+    def test_get_build_tools_not_found(self, test_client: TestClient, bad_id: int):
+        response = test_client.get(f"/builds/{bad_id}/tools")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.json()["detail"] == "Build not found"
+
+    @pytest.mark.xfail(reason="DELETE USING RETURNING doesn't work with SQLite")
+    def test_delete_build_tools(
+        self, test_client: TestClient, test_engine: AsyncEngine, single_build_tool: dict
+    ):
+        response = test_client.delete(
+            f"/builds/{single_build_tool['build_id']}/tools/{single_build_tool['tool_id']}"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["build_id"] == single_build_tool["build_id"]
+        assert response_data["tool"]["tool_id"] == single_build_tool["tool_id"]
+
+    @pytest.mark.xfail(reason="DELETE USING RETURNING doesn't work with SQLite")
+    @given(st.integers(max_value=0))
+    def test_delete_build_tools_bad_tool(
+        self,
+        test_client: TestClient,
+        test_engine: AsyncEngine,
+        single_build_tool: dict,
+        bad_id: int,
+    ):
+        response = test_client.delete(
+            f"/builds/{single_build_tool['build_id']}/tools/{bad_id}"
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["detail"] == "Build Tool pair not found"
+
+    @pytest.mark.xfail(reason="DELETE USING RETURNING doesn't work with SQLite")
+    @given(st.integers(max_value=0))
+    def test_delete_build_tools_bad_build(
+        self,
+        test_client: TestClient,
+        test_engine: AsyncEngine,
+        single_build_tool: dict,
+        bad_id: int,
+    ):
+        response = test_client.delete(
+            f"/builds/{bad_id}/tools/{single_build_tool['tool_id']}"
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response_data = response.json()
+        assert isinstance(response_data, dict)
+        assert response_data["detail"] == "Build Tool pair not found"
+
+    @pytest.mark.xfail(reason="Not properly implemented for driver agnostic")
+    def test_post_build_tools_existing(
+        self, test_client: TestClient, single_build_tool: dict
+    ):
+        response = test_client.post(
+            f"/builds/{single_build_tool['build_id']}/tools",
+            json=single_build_tool,
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+        response_data = response.json()
+        assert response_data["detail"] == "Build Tool pair already exists"
+
+    @pytest.mark.xfail(reason="Not properly implemented for driver agnostic")
+    @given(st.integers(min_value=-SQLITE_MAX_INT, max_value=0))
+    def test_post_build_tools_bad_build(
+        self, test_client: TestClient, single_build_tool: dict, bad_id: int
+    ):
+        response = test_client.post(
+            f"/builds/{bad_id}/tools",
+            json=single_build_tool,
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+        response_data = response.json()
+        assert response_data["detail"] == "Build or Tool does not exist."

@@ -85,8 +85,13 @@ async def get_all_buildtools_for_id(
     build_id: int, session: DatabaseDep, pagination: PaginationDep
 ):
     """Return all BuildTools present in database for a given build."""
-    result = session.scalars(
-        select(BuildTools.quantity_required, Tools)
+    result = session.execute(
+        select(
+            BuildTools.quantity_required,
+            Tools.tool_id,
+            Tools.name,
+            Tools.vendor,
+        )
         .select_from(join(BuildTools, Tools))
         .where(BuildTools.build_id == build_id)
         .order_by(BuildTools.tool_id)
@@ -94,7 +99,7 @@ async def get_all_buildtools_for_id(
         .limit(pagination["limit"])
     )
     build_id_task = session.execute(
-        select(BuildTools.build_id).where(Builds.build_id == build_id).limit(1)
+        select(Builds.build_id).where(Builds.build_id == build_id).limit(1)
     )
     if (await build_id_task).scalar_one_or_none() is None:
         result.close()
@@ -103,7 +108,7 @@ async def get_all_buildtools_for_id(
         )
     return {
         "build_id": build_id,
-        "tools": (await result).all(),
+        "tools": (await result).t.all(),
     }
 
 
@@ -129,15 +134,22 @@ async def get_buildtool_by_id(build_id: int, tool_id: int, session: DatabaseDep)
 @BUILD_TOOL_ROUTER.delete(path="/{tool_id}", response_model=BuildToolFullSingle)
 async def delete_buildtool_by_id(build_id: int, tool_id: int, session: DatabaseDep):
     """Delete a BuildTool present in database for a given build."""
+    schema_name = BuildTools.metadata.schema
+    if schema_name is None:
+        schema_name = ""
+    else:
+        schema_name += "."
     async with session.begin():
-        result = await session.scalars(
+        result = await session.execute(
             delete(BuildTools)
             .where(BuildTools.tool_id == Tools.tool_id)
             .where(
                 BuildTools.build_id == build_id,
                 Tools.tool_id == tool_id,
             )
-            .returning(BuildTools.quantity_required, Tools.__table__.columns)
+            # this returning only returns the deleted row
+            # not the full state of the join to do this statement
+            .returning(BuildTools.quantity_required)
         )
         deleted_buildtool = result.one_or_none()
         if deleted_buildtool is None:
@@ -146,14 +158,22 @@ async def delete_buildtool_by_id(build_id: int, tool_id: int, session: DatabaseD
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Build Tool pair not found",
             )
-        # auto commit
+        await session.commit()
+        # pairing exists get remaining data from tools table
+    tool_result = await session.scalars(select(Tools).where(Tools.tool_id == tool_id))
+
     return {
         "build_id": build_id,
-        "tool": deleted_buildtool,
+        "tool": {
+            **tool_result.one().__dict__,
+            "quantity_required": deleted_buildtool.quantity_required,
+        },
     }
 
 
-@BUILD_TOOL_ROUTER.post(path="", response_model=BuildToolFullSingle)
+@BUILD_TOOL_ROUTER.post(
+    path="", response_model=BuildToolFullSingle, status_code=status.HTTP_201_CREATED
+)
 async def add_buildtool_to_build(
     build_id: int, new_tool: Annotated[BuildToolCreate, Body()], session: DatabaseDep
 ):
@@ -185,6 +205,7 @@ async def add_buildtool_to_build(
             # for each error
             # for more info: https://github.com/MagicStack/asyncpg/
             # its in the exceptions folder somewhere
+            # TODO: how to handle the variations of Integrity Error
             if e.orig.pgcode == ASYNCPG_UNIQUE_VIOLATION_CODE:  # type: ignore
                 # repeated sku
                 raise HTTPException(
@@ -192,6 +213,7 @@ async def add_buildtool_to_build(
                     detail="Build Tool pair already exists",
                 ) from None
             if e.orig.pgcode == ASYNCPG_FK_VIOLATION_CODE:  # type: ignore
+                # TODO: if Build is missing this should 404
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Build or Tool does not exist",
@@ -205,7 +227,10 @@ async def add_buildtool_to_build(
         # autocommit
     return {
         "build_id": build_id,
-        "tool": tool_details.scalar_one(),
+        "tool": {
+            **tool_details.scalar_one().__dict__,
+            "quantity_required": new_tool.quantity_required,
+        },
     }
 
 
@@ -230,16 +255,20 @@ async def update_buildtool_for_build(
                 Tools.tool_id == tool_id,
             )
             .values(quantity_required=new_tool.quantity_required)
-            .returning(BuildTools.quantity_required, Tools.__table__.columns)
+            .returning(BuildTools.quantity_required)
         )
-        result = await session.scalars(statement)
+        result = await session.execute(statement)
         build_tool_result = result.one_or_none()
         if build_tool_result is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Build Tool not found"
             ) from None
         # auto commit
+    tool_result = await session.scalars(select(Tools).where(Tools.tool_id == tool_id))
     return {
         "build_id": build_id,
-        "tool": build_tool_result,
+        "tool": {
+            "quantity_required": build_tool_result.quantity_required,
+            **tool_result.one().__dict__,
+        },
     }
