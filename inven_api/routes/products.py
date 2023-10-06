@@ -3,14 +3,12 @@
 The products table in SQL is defined in ../database/models.py
 """
 # Standard Library
+from operator import add
+from operator import sub
 from typing import Annotated
 from typing import Any
 
 # External Party
-from database import Products
-from database import ProductTypes
-from dependencies import DatabaseDep
-from dependencies import PaginationDep
 from fastapi import APIRouter
 from fastapi import Body
 from fastapi import Depends
@@ -18,7 +16,19 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
 from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+from sqlalchemy import delete
+from sqlalchemy import exc as sa_exc
+from sqlalchemy import insert
 from sqlalchemy import select
+
+# Local Modules
+from inven_api.database import Products
+from inven_api.database import ProductTypes
+from inven_api.dependencies import AtomicUpdateOperations
+from inven_api.dependencies import DatabaseDep
+from inven_api.dependencies import PaginationDep
 
 ROUTER = APIRouter(prefix="/products", tags=["products"])
 
@@ -71,26 +81,34 @@ def _apply_spec_statement(sql, specs: dict[str, Any]):
 ProductDep = Annotated[dict[str, Any], Depends(product_query)]
 
 
-class ProductCreate(BaseModel):
+class ProductBase(BaseModel):
     """Define a Product to be parsed from an incoming HTTP request.
 
     Very similar to the Products in ../database/models.py.
+    This is a shared base of the common fields, should not be instantiated.
     """
 
     name: str
     vendor: str
     product_type: ProductTypes
     vendor_sku: str
-    quantity: int
+    quantity: int = Field(ge=0)  # can't have a negative quantity
+
+
+class ProductCreate(ProductBase):
+    """Model to be parsed from a create request."""
+
+    # No extra columns to add
+    pass  # noqa: PIE790
 
 
 class ProductUpdate(BaseModel):
     """Define what fields can be updated on a Product."""
 
-    quantity: int
+    quantity: int = Field(ge=0)
 
 
-class ProductFull(ProductCreate):
+class ProductFull(ProductBase):
     """Define a Product for deserializing as response to HTTP request.
 
     Just adds 'id' field which is necessary for responses.
@@ -99,13 +117,58 @@ class ProductFull(ProductCreate):
     product_id: int
 
 
+class ProductUpdateBase(BaseModel):
+    """Define a Product that can be serialized out to a response.
+
+    Very similar to the Products in ../database/models.py.
+    This is a shared base of the common fields, should not be instantiated.
+
+    Setting 'from_attributes' will help with validation
+    from a SQLAlchemy Products item.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    product_id: int
+    vendor_sku: str
+    quantity: int | None = Field(default=None, ge=0)
+
+
+class ProductPreUpdate(ProductUpdateBase):
+    """Define a Product that can be serialized out to a response.
+
+    This is used for update and get operations, where the get happens before update.
+    """
+
+    quantity: int = Field(ge=0, serialization_alias="preUpdateQuantity")
+
+
+class ProductPostUpdate(ProductUpdateBase):
+    """Define a Product that can be serialized out to a response.
+
+    This is used for update and get operations, where the get happens after update.
+    """
+
+    quantity: int = Field(ge=0, serialization_alias="postUpdateQuantity")
+
+
 @ROUTER.get("", response_model=list[ProductFull])
 async def read_products(
     session: DatabaseDep,
     pagination: PaginationDep,
     product_spec: ProductDep,
 ):
-    """Return all Products present in database."""
+    """Return all Products present in database.
+
+    Can be affected by query params:
+        - name: name of product to get
+        - vendor: vendor of product to get
+        - type: "part" or "material"
+        - sku: exact sku of product to get, helpful if product_id is unknown
+
+    Also uses pagination dependency to limit results.
+    Default page is 0 with a page size of 5
+    """
     statement = (
         select(Products)
         .select_from(Products)
@@ -120,11 +183,11 @@ async def read_products(
     return result.all()
 
 
-@ROUTER.get("/{prod_id}")
+@ROUTER.get("/{prod_id}", response_model=ProductFull)
 async def read_product_by_id(
     prod_id: int,
     session: DatabaseDep,
-) -> ProductFull:
+):
     """Return a Product present in database.
 
     Does not use pagination dependency as up to one result only.
@@ -134,12 +197,174 @@ async def read_product_by_id(
     ).one_or_none()
     if result is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Product not Found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
         )
-    return result  # type: ignore
+    return result
 
 
-@ROUTER.post("", response_model=ProductFull)
-async def insert_new_product(new_prod: Annotated[ProductCreate, Body()]) -> ProductFull:
+@ROUTER.post("", response_model=ProductFull, status_code=status.HTTP_201_CREATED)
+async def insert_new_product(
+    new_prod: Annotated[ProductCreate, Body()], session: DatabaseDep
+):
     """Take in data for a singular new product and add to database."""
-    ...
+    async with session.begin():
+        try:
+            return await session.scalar(
+                insert(Products).values(new_prod.model_dump()).returning(Products)
+            )
+        except sa_exc.IntegrityError:
+            # integrity can be broken if vendor_sku is not unique
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Vendor SKU already exists",
+            ) from None
+
+
+@ROUTER.delete(path="/{prod_id}", response_model=ProductFull)
+async def remove_product(prod_id: int, session: DatabaseDep):
+    """Remove product from database.
+
+    This will return the deleted product
+    if there are no Builds relying upon this part.
+
+    If there is such a constraint still, respond with 405
+    """
+    async with session.begin():
+        try:
+            result = (
+                await session.scalars(
+                    delete(Products)
+                    .where(Products.product_id == prod_id)
+                    .returning(Products)
+                )
+            ).one_or_none()
+            if result is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
+                )
+
+        except sa_exc.IntegrityError:
+            await session.rollback()
+            # TODO: add logging
+            # This happens due to foreign key constraint
+            # from table build_parts (BuildParts)
+            # TODO: include the build_id in the response
+            raise HTTPException(
+                status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                detail="Product is still part of an active build",
+            ) from None
+
+    return result
+
+
+@ROUTER.put(path="/{prod_id}", response_model=ProductFull)
+async def update_product(
+    prod_id: int, updated_prod: Annotated[ProductUpdate, Body()], session: DatabaseDep
+):
+    """Update the quantity in bulk for a product.
+
+    The thinking of this endpoint is that someone has just counted,
+    the available stock of a product and is setting the current amount.
+    """
+    # quantity being less than 0 is handled by pydantic
+    async with session.begin():
+        tobe_updated_prod = (
+            await session.execute(
+                select(Products).where(Products.product_id == prod_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if tobe_updated_prod is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
+            )
+        tobe_updated_prod.quantity = updated_prod.quantity
+        await session.commit()
+    return tobe_updated_prod
+
+
+@ROUTER.put(
+    path="/{prod_id}/quantity/{atomic_op}/get",
+    response_model=ProductPostUpdate,
+    response_model_by_alias=True,
+)
+async def update_product_quantity_atomic_postget(
+    session: DatabaseDep,
+    prod_id: int,
+    atomic_op: AtomicUpdateOperations,
+    value: Annotated[int, Query(gt=0)],
+):
+    """Update the quantity atomically and by a delta value for a Product.
+
+    The thinking of this endpoint is that someone is taking out some items,
+    they don't know the total leftover after their action but they know
+    how many they took.
+
+    There is no required JSON body.
+
+    Returns:
+        ProductPostUpdate: serialized Product with post update quantity
+    """
+    async with session.begin():
+        tobe_updated_prod = (
+            await session.execute(
+                select(Products).where(Products.product_id == prod_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+
+        # check for nonexistence - 404
+        if tobe_updated_prod is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
+            )
+        oper = add if atomic_op == AtomicUpdateOperations.INCREMENT else sub
+
+        tobe_updated_prod.quantity = oper(Products.quantity, value)
+        # auto commit
+    # refresh to get the new value, can emit a Select statement
+    await session.refresh(tobe_updated_prod, ["quantity"])
+    return tobe_updated_prod
+
+
+@ROUTER.put(
+    path="/{prod_id}/quantity/get/{atomic_op}",
+    response_model=ProductPreUpdate,
+    response_model_by_alias=True,
+)
+async def update_product_quantity_atomic_preget(
+    session: DatabaseDep,
+    prod_id: int,
+    atomic_op: AtomicUpdateOperations,
+    value: Annotated[int, Query(gt=0)],
+):
+    """Update the quantity atomically and by a delta value for a Product.
+
+    The thinking of this endpoint is that someone is taking out some items,
+    they don't know the total leftover after their action but they know
+    how many they took.
+
+    There is no required JSON body.
+
+    Returns:
+        ProductPreUpdate: serialized Product with pre update quantity
+    """
+    async with session.begin():
+        tobe_updated_prod = (
+            await session.execute(
+                select(Products).where(Products.product_id == prod_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+
+        # check for nonexistence - 404
+        if tobe_updated_prod is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
+            )
+        # create the response object now, otherwise previous quantity value is lost
+        response_prod = ProductPreUpdate.model_validate(tobe_updated_prod)
+
+        oper = add if atomic_op == AtomicUpdateOperations.INCREMENT else sub
+
+        tobe_updated_prod.quantity = oper(Products.quantity, value)
+        # auto commit
+    return response_prod

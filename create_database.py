@@ -4,20 +4,21 @@ import argparse
 import asyncio
 
 # External Party
-from database import BuildParts
-from database import Builds
-from database import InventoryBase
-from database import Products
-from database import ProductTypes
-from database import Tools
-from database import get_engine
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 # Local Modules
-from common import DbConfig
+from inven_api.common import DbConfig
+from inven_api.database import BuildProducts
+from inven_api.database import Builds
+from inven_api.database import InventoryBase
+from inven_api.database import Products
+from inven_api.database import ProductTypes
+from inven_api.database import Tools
+from inven_api.database import get_engine
+from inven_api.database.models import BuildTools
 
 BIRDHOUSE_PRODUCTS = {
     "dowel": Products(
@@ -47,6 +48,26 @@ BIRDHOUSE_BUILD = Builds(
     name="Birdhouse",
     sku="IMA_BH_S",  # inventory management api birdhouse small
 )
+
+BIRDHOUSE_TOOLS = [
+    Tools(
+        name="Compact Auto Lock Tape Measure 9ft",
+        vendor="Milwaukee",
+        total_owned=5,
+        total_avail=5,
+    ),
+    Tools(
+        name="13 Amp Corded 7-1/4 in. Circular Saw",
+        vendor="Ryobi",
+        total_owned=2,
+        total_avail=1,
+    ),
+    Tools(
+        name="10 oz. Hammer with 9-3/4 in. Wood Handle",
+        vendor="Stanley",
+        total_owned=10,  # who doesn't have a lot of hammers
+    ),
+]
 
 
 async def create_schema(engine: AsyncEngine):
@@ -84,23 +105,7 @@ async def insert_starter_data(session_maker: async_sessionmaker[AsyncSession]):
         session.add_all(
             [
                 *BIRDHOUSE_PRODUCTS.values(),
-                Tools(
-                    name="Compact Auto Lock Tape Measure 9ft",
-                    vendor="Milwaukee",
-                    total_owned=5,
-                    total_avail=5,
-                ),
-                Tools(
-                    name="13 Amp Corded 7-1/4 in. Circular Saw",
-                    vendor="Ryobi",
-                    total_owned=2,
-                    total_avail=1,
-                ),
-                Tools(
-                    name="10 oz. Hammer with 9-3/4 in. Wood Handle",
-                    vendor="Stanley",
-                    total_owned=10,  # who doesn't have a lot of hammers
-                ),
+                *BIRDHOUSE_TOOLS,
                 BIRDHOUSE_BUILD,
             ]
         )
@@ -117,17 +122,26 @@ async def insert_dependent_data(session_maker: async_sessionmaker[AsyncSession])
     async with session_maker() as session, session.begin():
         prod_result = await session.execute(sa.select(Products.product_id))
         bom_result = await session.execute(sa.select(Builds.build_id))
+        tool_result = await session.execute(sa.select(Tools.tool_id))
 
         bom_id = bom_result.scalar_one()
 
         session.add_all(
             [
-                BuildParts(
+                BuildProducts(
                     product_id=pid,
                     build_id=bom_id,
                     quantity_required=10,
                 )
                 for pid in prod_result.scalars()
+            ]
+            + [
+                BuildTools(
+                    build_did=bom_id,
+                    tool_id=tid,
+                    quantity_required=2,
+                )
+                for tid in tool_result.scalars()
             ]
         )
 

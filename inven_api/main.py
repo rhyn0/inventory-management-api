@@ -6,10 +6,10 @@ from logging.config import dictConfig
 
 # External Party
 from fastapi import FastAPI
-from routes import router
 
 # Local Modules
 from common import LogConfig
+from routes import ROUTER as SUB_ROUTER
 
 LOG = None
 LOG_NAME = "api"
@@ -26,7 +26,7 @@ async def api_lifespan(app: FastAPI):
 
 
 APP = FastAPI(lifespan=api_lifespan)
-APP.include_router(router)
+APP.include_router(SUB_ROUTER)
 
 
 @APP.get("/")
