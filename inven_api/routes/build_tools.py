@@ -1,5 +1,6 @@
 """Module containing routes for interacting with intersection table BuildProducts."""
 # Standard Library
+import logging
 from typing import Annotated
 
 # External Party
@@ -18,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy import update
 
 # Local Modules
+from inven_api.common import LOG_NAME
 from inven_api.database import ASYNCPG_FK_VIOLATION_CODE
 from inven_api.database import ASYNCPG_UNIQUE_VIOLATION_CODE
 from inven_api.database.models import Builds
@@ -31,6 +33,7 @@ from .http_models import BuildRelationFullBase
 from .http_models import BuildRelationUpdateBase
 
 BUILD_TOOL_ROUTER = APIRouter(prefix="/{build_id}/tools", tags=["builds"])
+LOG = logging.getLogger(LOG_NAME + ".build_tools")
 
 
 class BuildToolCreate(BuildRelationBase):
@@ -85,6 +88,13 @@ async def get_all_buildtools_for_id(
     build_id: int, session: DatabaseDep, pagination: PaginationDep
 ):
     """Return all BuildTools present in database for a given build."""
+    LOG.debug("Getting all BuildTools for build_id: %s", build_id)
+    LOG.info(
+        "Getting all BuildTools for build_id: %s - pagination: offset %d limit %d",
+        build_id,
+        pagination["page"] * pagination["limit"],
+        pagination["limit"],
+    )
     result = session.execute(
         select(
             BuildTools.quantity_required,
@@ -103,6 +113,7 @@ async def get_all_buildtools_for_id(
     )
     if (await build_id_task).scalar_one_or_none() is None:
         result.close()
+        LOG.warning("Build ID %s not found", build_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Build not found"
         )
@@ -115,6 +126,9 @@ async def get_all_buildtools_for_id(
 @BUILD_TOOL_ROUTER.get(path="/{tool_id}", response_model=BuildToolFullSingle)
 async def get_buildtool_by_id(build_id: int, tool_id: int, session: DatabaseDep):
     """Return a BuildTool present in database for a given build."""
+    LOG.debug(
+        "Getting a BuildTools for build_id: %d and tool_id: %d", build_id, tool_id
+    )
     result = await session.scalars(
         select(Tools, BuildTools.quantity_required)
         .select_from(join(BuildTools, Tools))
@@ -122,6 +136,7 @@ async def get_buildtool_by_id(build_id: int, tool_id: int, session: DatabaseDep)
     )
     build_tool = result.one_or_none()
     if build_tool is None:
+        LOG.warning("Build ID %s and Tool ID %s not found", build_id, tool_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Build Tool pair not found"
         )
@@ -134,11 +149,9 @@ async def get_buildtool_by_id(build_id: int, tool_id: int, session: DatabaseDep)
 @BUILD_TOOL_ROUTER.delete(path="/{tool_id}", response_model=BuildToolFullSingle)
 async def delete_buildtool_by_id(build_id: int, tool_id: int, session: DatabaseDep):
     """Delete a BuildTool present in database for a given build."""
-    schema_name = BuildTools.metadata.schema
-    if schema_name is None:
-        schema_name = ""
-    else:
-        schema_name += "."
+    LOG.info(
+        "Deleting a BuildTools for build_id: %d and tool_id: %d", build_id, tool_id
+    )
     async with session.begin():
         result = await session.execute(
             delete(BuildTools)
@@ -154,6 +167,7 @@ async def delete_buildtool_by_id(build_id: int, tool_id: int, session: DatabaseD
         deleted_buildtool = result.one_or_none()
         if deleted_buildtool is None:
             await session.rollback()
+            LOG.warning("Build ID %s and Tool ID %s not found", build_id, tool_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Build Tool pair not found",
@@ -183,6 +197,12 @@ async def add_buildtool_to_build(
     Then FK constraints on both of those ids, so if uniqueness is not met
     or the values don't exist it can fail.
     """
+    LOG.debug(
+        "Adding a BuildTool to build_id: %d. Uses tool_id %d and needs %d quantity.",
+        build_id,
+        new_tool.tool_id,
+        new_tool.quantity_required,
+    )
     async with session.begin():
         statement = (
             insert(BuildTools)
@@ -206,6 +226,7 @@ async def add_buildtool_to_build(
             # for more info: https://github.com/MagicStack/asyncpg/
             # its in the exceptions folder somewhere
             # TODO: how to handle the variations of Integrity Error
+            LOG.exception("Error adding BuildTool to database")
             if e.orig.pgcode == ASYNCPG_UNIQUE_VIOLATION_CODE:  # type: ignore
                 # repeated sku
                 raise HTTPException(
@@ -245,6 +266,12 @@ async def update_buildtool_for_build(
 
     Only field updateable for BuildTool is its quantity required.
     """
+    LOG.debug(
+        "Updating tool %s for build %s to have quantity %d",
+        tool_id,
+        build_id,
+        new_tool.quantity_required,
+    )
     async with session.begin():
         statement = (
             update(BuildTools)
@@ -260,6 +287,7 @@ async def update_buildtool_for_build(
         result = await session.execute(statement)
         build_tool_result = result.one_or_none()
         if build_tool_result is None:
+            LOG.warning("Build %s tool %s not found", build_id, tool_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Build Tool not found"
             ) from None

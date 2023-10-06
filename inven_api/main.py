@@ -8,17 +8,17 @@ from logging.config import dictConfig
 from fastapi import FastAPI
 
 # Local Modules
+from common import LOG_NAME
 from common import LogConfig
 from routes import ROUTER as SUB_ROUTER
 
 LOG = None
-LOG_NAME = "api"
 
 
 @asynccontextmanager
 async def api_lifespan(app: FastAPI):
     """Function to be called when the server starts and stops."""
-    global LOG, LOG_NAME
+    global LOG
     log_config = LogConfig(LOGGER_NAME=LOG_NAME, LOG_LEVEL="INFO")  # type: ignore
     dictConfig(log_config.model_dump())
     LOG = logging.getLogger(LOG_NAME)

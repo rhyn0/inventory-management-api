@@ -3,6 +3,7 @@
 The products table in SQL is defined in ../database/models.py
 """
 # Standard Library
+import logging
 from operator import add
 from operator import sub
 from typing import Annotated
@@ -24,6 +25,7 @@ from sqlalchemy import insert
 from sqlalchemy import select
 
 # Local Modules
+from inven_api.common import LOG_NAME
 from inven_api.database import Products
 from inven_api.database import ProductTypes
 from inven_api.dependencies import AtomicUpdateOperations
@@ -31,6 +33,8 @@ from inven_api.dependencies import DatabaseDep
 from inven_api.dependencies import PaginationDep
 
 ROUTER = APIRouter(prefix="/products", tags=["products"])
+
+LOG = logging.getLogger(LOG_NAME + ".products")
 
 
 def product_query(
@@ -169,6 +173,7 @@ async def read_products(
     Also uses pagination dependency to limit results.
     Default page is 0 with a page size of 5
     """
+    LOG.debug("Getting all products - pagination: %s", pagination)
     statement = (
         select(Products)
         .select_from(Products)
@@ -192,10 +197,12 @@ async def read_product_by_id(
 
     Does not use pagination dependency as up to one result only.
     """
+    LOG.debug("Getting product %s", prod_id)
     result = (
         await session.scalars(select(Products).where(Products.product_id == prod_id))
     ).one_or_none()
     if result is None:
+        LOG.warning("Product %s not found", prod_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
         )
@@ -207,6 +214,7 @@ async def insert_new_product(
     new_prod: Annotated[ProductCreate, Body()], session: DatabaseDep
 ):
     """Take in data for a singular new product and add to database."""
+    LOG.debug("Creating new product %s", new_prod)
     async with session.begin():
         try:
             return await session.scalar(
@@ -215,6 +223,7 @@ async def insert_new_product(
         except sa_exc.IntegrityError:
             # integrity can be broken if vendor_sku is not unique
             await session.rollback()
+            LOG.exception("Vendor SKU already exists - data %s", new_prod)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Vendor SKU already exists",
@@ -230,6 +239,7 @@ async def remove_product(prod_id: int, session: DatabaseDep):
 
     If there is such a constraint still, respond with 405
     """
+    LOG.debug("Deleting product %s", prod_id)
     async with session.begin():
         try:
             result = (
@@ -240,13 +250,14 @@ async def remove_product(prod_id: int, session: DatabaseDep):
                 )
             ).one_or_none()
             if result is None:
+                LOG.warning("Product %s not found", prod_id)
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
                 )
 
         except sa_exc.IntegrityError:
             await session.rollback()
-            # TODO: add logging
+            LOG.exception("Product %s still in use", prod_id)
             # This happens due to foreign key constraint
             # from table build_parts (BuildParts)
             # TODO: include the build_id in the response
@@ -268,6 +279,7 @@ async def update_product(
     the available stock of a product and is setting the current amount.
     """
     # quantity being less than 0 is handled by pydantic
+    LOG.debug("Updating product %s with %s", prod_id, updated_prod)
     async with session.begin():
         tobe_updated_prod = (
             await session.execute(
@@ -275,6 +287,7 @@ async def update_product(
             )
         ).scalar_one_or_none()
         if tobe_updated_prod is None:
+            LOG.warning("Product %s not found", prod_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
             )
@@ -305,6 +318,7 @@ async def update_product_quantity_atomic_postget(
     Returns:
         ProductPostUpdate: serialized Product with post update quantity
     """
+    LOG.debug("Updating product %s with %s", prod_id, atomic_op)
     async with session.begin():
         tobe_updated_prod = (
             await session.execute(
@@ -314,6 +328,8 @@ async def update_product_quantity_atomic_postget(
 
         # check for nonexistence - 404
         if tobe_updated_prod is None:
+            await session.rollback()
+            LOG.warning("Product %s not found", prod_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
             )
@@ -348,6 +364,7 @@ async def update_product_quantity_atomic_preget(
     Returns:
         ProductPreUpdate: serialized Product with pre update quantity
     """
+    LOG.debug("Updating product %s with %s", prod_id, atomic_op)
     async with session.begin():
         tobe_updated_prod = (
             await session.execute(
@@ -357,6 +374,8 @@ async def update_product_quantity_atomic_preget(
 
         # check for nonexistence - 404
         if tobe_updated_prod is None:
+            await session.rollback()
+            LOG.warning("Product %s not found", prod_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
             )

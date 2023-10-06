@@ -1,5 +1,6 @@
 # Standard Library
 from enum import StrEnum
+import logging
 from operator import add
 from operator import sub
 from typing import Annotated
@@ -21,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy import update
 
 # Local Modules
+from inven_api.common import LOG_NAME
 from inven_api.database.models import Tools
 from inven_api.dependencies import DatabaseDep
 from inven_api.dependencies import PaginationDep
@@ -28,6 +30,8 @@ from inven_api.dependencies import PaginationDep
 # redirect slashes means that if a client
 # sends a request to /tools it is same as /tools/
 ROUTER = APIRouter(prefix="/tools", tags=["tools"], redirect_slashes=True)
+
+LOG = logging.getLogger(LOG_NAME + ".tools")
 
 
 def tool_query(
@@ -160,6 +164,7 @@ async def get_all_tools(
     session: DatabaseDep, paginate: PaginationDep, tool_spec: ToolDep
 ):
     """Read with all Tools matching query params and pagination."""
+    LOG.debug("Getting all tools - pagination: %s", paginate)
     paginate_statement = select(Tools).offset(paginate["page"]).limit(paginate["limit"])
     return (
         await session.scalars(_apply_spec_statement(paginate_statement, tool_spec))
@@ -169,11 +174,13 @@ async def get_all_tools(
 @ROUTER.get(path="/{tool_id}", response_model=ToolFull)
 async def get_single_tool(tool_id: int, session: DatabaseDep):
     """Read the tool with the requested id."""
+    LOG.debug("Getting tool %s", tool_id)
     result = (
         await session.execute(select(Tools).where(Tools.tool_id == tool_id))
     ).scalar_one_or_none()
 
     if result is None:
+        LOG.warning("Tool %s not found", tool_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found"
         )
@@ -187,6 +194,7 @@ async def remove_tool(tool_id: int, session: DatabaseDep):
     If the tool has any builds that require it, it cannot be deleted.
     If tool does not exist, raise 404.
     """
+    LOG.debug("Deleting tool %s", tool_id)
     async with session.begin():
         try:
             result = (
@@ -196,12 +204,14 @@ async def remove_tool(tool_id: int, session: DatabaseDep):
             ).scalar_one_or_none()
         except sa_exc.IntegrityError:
             await session.rollback()
+            LOG.exception("Tool %s still needed for builds", tool_id)
             raise HTTPException(
                 status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
                 detail="Tool is still needed for builds",
             ) from None
 
         if result is None:
+            LOG.warning("Tool %s not found", tool_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found"
             )
@@ -218,6 +228,7 @@ async def update_tool_quantity_set(
     This is a set operation, not an increment. Based on provided body,
     this will set the field in database to given.
     """
+    LOG.debug("Updating tool %s with %s", tool_id, update_data)
     async with session.begin():
         result = (
             await session.execute(
@@ -226,6 +237,8 @@ async def update_tool_quantity_set(
         ).scalar_one_or_none()
 
         if result is None:
+            await session.rollback()
+            LOG.warning("Tool %s not found", tool_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Tool {tool_id} not found",
@@ -243,6 +256,10 @@ async def update_tool_quantity_set(
         except sa_exc.IntegrityError:
             # occurs when total_owned < total_avail
             await session.rollback()
+            LOG.exception(
+                "Owned must be greater than or equal to available - data %s",
+                update_data,
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Owned must be greater than or equal to available",
@@ -271,6 +288,7 @@ async def update_tool_quantity_atomic_postget(
     this will increment/decrement the field in database by given value.
     Then return the new value.
     """
+    LOG.debug("Updating tool %s with %s", tool_id, value)
     async with session.begin():
         result = (
             await session.execute(
@@ -279,6 +297,7 @@ async def update_tool_quantity_atomic_postget(
         ).scalar_one_or_none()
 
         if result is None:
+            LOG.warning("Tool %s not found", tool_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Tool {tool_id} not found",
@@ -314,6 +333,7 @@ async def update_tool_quantity_atomic_preget(
     this will increment/decrement the field in database by given value.
     Then return the value prior to the execution.
     """
+    LOG.debug("Updating tool %s with %s", tool_id, value)
     async with session.begin():
         result = (
             await session.execute(
@@ -322,6 +342,8 @@ async def update_tool_quantity_atomic_preget(
         ).scalar_one_or_none()
 
         if result is None:
+            await session.rollback()
+            LOG.warning("Tool %s not found", tool_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Tool {tool_id} not found",

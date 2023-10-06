@@ -1,5 +1,6 @@
 """Module containing routes for interacting with intersection table BuildProducts."""
 # Standard Library
+import logging
 from typing import Annotated
 
 # External Party
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy import update
 
 # Local Modules
+from inven_api.common import LOG_NAME
 from inven_api.database.models import BuildProducts
 from inven_api.database.models import Builds
 from inven_api.database.models import Products
@@ -28,6 +30,7 @@ from .http_models import BuildRelationFullBase
 from .http_models import BuildRelationUpdateBase
 
 BUILD_PROD_ROUTER = APIRouter(prefix="/{build_id}/products", tags=["builds"])
+LOG = logging.getLogger(LOG_NAME + ".build_products")
 
 
 class BuildProductCreate(BuildRelationBase):
@@ -86,6 +89,12 @@ async def read_all_build_parts_for_id(
 ):
     """Return all BuildParts present in database for a given build."""
     # only select the columns of the products table that are necessary
+    LOG.debug(
+        "Getting all products for build %s - pagination: offset %d limit %d",
+        build_id,
+        page_choices["page"] * page_choices["limit"],
+        page_choices["limit"],
+    )
     build_product_exist_task = session.scalars(
         select(Builds).where(Builds.build_id == build_id)
     )
@@ -104,6 +113,7 @@ async def read_all_build_parts_for_id(
         .limit(page_choices["limit"])
     )
     if (await build_product_exist_task).one_or_none() is None:
+        LOG.warning("Build %s not found", build_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Build not found"
         )
@@ -122,6 +132,7 @@ async def read_all_build_parts_for_id(
 )
 async def read_build_part_for_id(build_id: int, product_id: int, session: DatabaseDep):
     """Return a BuildPart present in database for a given build."""
+    LOG.debug("Getting product %s for build %s", product_id, build_id)
     result = await session.execute(
         select(
             BuildProducts.quantity_required,
@@ -135,6 +146,7 @@ async def read_build_part_for_id(build_id: int, product_id: int, session: Databa
     )
     build_product = result.one_or_none()
     if build_product is None:
+        LOG.warning("Build %s product %s not found", build_id, product_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Build Product pair not found"
         )
@@ -154,6 +166,7 @@ async def delete_build_part_for_id(
     Even though this response model contains the product information,
     it does not delete the product from the product table.
     """
+    LOG.info("Deleting product %s for build %s", product_id, build_id)
     async with session.begin():
         result = await session.scalars(
             delete(BuildProducts)
@@ -167,6 +180,7 @@ async def delete_build_part_for_id(
         deleted_buildproduct = result.one_or_none()
         if deleted_buildproduct is None:
             await session.rollback()
+            LOG.warning("Build %s product %s not found", build_id, product_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Build Product pair not found",
@@ -192,6 +206,7 @@ async def add_buildpart_to_build(
     # TODO: make a general new build with products endpoint
     # now get the product information
     # using session.scalars auto creates a BEGIN, so let's make that explicit
+    LOG.info("Adding product %s to build %s", new_part.product_id, build_id)
     async with session.begin():
         prod_result = session.scalars(
             select(Products).where(Products.product_id == new_part.product_id)
@@ -209,6 +224,7 @@ async def add_buildpart_to_build(
         # different message for each condition
         linked_build = (await build_result).one_or_none()
         if linked_build is None:
+            LOG.warning("Build %s not found", build_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Build not found"
             )
@@ -237,6 +253,12 @@ async def update_buildpart_for_build(
 
     Only field updateable for BuildProduct is its quantity required.
     """
+    LOG.debug(
+        "Updating product %s for build %s to have quantity",
+        product_id,
+        build_id,
+        new_part.quantity_required,
+    )
     async with session.begin():
         statement = (
             update(BuildProducts)
@@ -250,6 +272,7 @@ async def update_buildpart_for_build(
         result = await session.execute(statement)
         result = result.scalar_one_or_none()
         if result is None:
+            LOG.warning("Build %s product %s not found", build_id, product_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Build Product not found"
             ) from None
