@@ -43,6 +43,10 @@ poetry shell
 poetry run python ...
 ```
 
+### Semantic Versioning
+
+To keep a single source of truth about the version, instead of using `pyproject.toml` the semver is stored in `inven_api/__init__.py` and I use Tiangolo's [Poetry Plugin](https://github.com/tiangolo/poetry-version-plugin) to load the version from there.
+
 ### Format and Lint
 
 [Black](https://black.readthedocs.io/en/stable/) has been a great formatter for all of my projects and this one is no different.

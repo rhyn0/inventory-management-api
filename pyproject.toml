@@ -1,10 +1,11 @@
 [tool.poetry]
 name = "inventory-management-api"
-version = "0.1.0"
+version = "0.0.0"
 description = "Inventory Tracking API project"
 authors = ["Ryan Ozawa <ryan.ozawa21@gmail.com>"]
 license = "MIT"
 readme = "README.md"
+packages = [{ include = "inven_api", from = "." }]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -30,6 +31,9 @@ coverage = "^7.3.1"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry-version-plugin]
+source = "init"
 
 [tool.pytest.ini_options]
 markers = ["no_insert: marks tests as not inserting data into the database"]

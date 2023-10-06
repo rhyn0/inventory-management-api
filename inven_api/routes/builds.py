@@ -1,5 +1,6 @@
 """Module containing request routes for interacting directly with Builds."""
 # Standard Library
+import logging
 from typing import Annotated
 from typing import Any
 
@@ -19,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy import update
 
 # Local Modules
+from inven_api.common import LOG_NAME
 from inven_api.database.models import Builds
 from inven_api.dependencies import DatabaseDep
 from inven_api.dependencies import PaginationDep
@@ -29,6 +31,8 @@ from .build_tools import BUILD_TOOL_ROUTER
 ROUTER = APIRouter(prefix="/builds", tags=["builds"])
 ROUTER.include_router(BUILD_PROD_ROUTER)
 ROUTER.include_router(BUILD_TOOL_ROUTER)
+
+LOG = logging.getLogger(LOG_NAME + ".builds")
 
 
 def build_query(
@@ -129,6 +133,7 @@ async def read_all_builds(
     build_spec: BuildDep,
 ):
     """Return all Products present in database."""
+    LOG.debug("Getting all builds - pagination: %s", pagination)
     statement = (
         select(Builds)
         .offset(pagination["page"] * pagination["limit"])
@@ -151,10 +156,12 @@ async def read_build_by_id(
 
     Does not use pagination dependency as up to one result only.
     """
+    LOG.debug("Getting build %s", build_id)
     result = (
         await session.scalars(select(Builds).where(Builds.build_id == build_id))
     ).one_or_none()
     if result is None:
+        LOG.warning("Build %s not found", build_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Item not Found"
         )
@@ -167,6 +174,7 @@ async def create_new_build(
 ):
     """Take in data for a singular new build and add to database."""
     # insert the build, integrity error if the sku exists
+    LOG.debug("Creating new build %s", new_prod)
     async with session.begin():
         statement = (
             insert(Builds)
@@ -180,6 +188,7 @@ async def create_new_build(
             result = await session.execute(statement)
         except sa_exc.IntegrityError:
             # repeated sku
+            LOG.exception("SKU %s already exists", new_prod.sku)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"SKU {new_prod.sku} already exists",
@@ -196,11 +205,14 @@ async def delete_build_by_id(build_id: int, session: DatabaseDep):
     where the `build_id` is referenced.
     Return 404 if the build_id does not exist.
     """
+    LOG.debug("Deleting build %s", build_id)
     async with session.begin():
         statement = delete(Builds).where(Builds.build_id == build_id).returning(Builds)
         result = await session.execute(statement)
         result = result.scalar_one_or_none()
         if result is None:
+            await session.rollback()
+            LOG.warning("Build %s not found", build_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Build not found"
             )
@@ -216,6 +228,7 @@ async def update_build_by_id(
     Not allowed to update the build_id or sku.
     So can only update the name.
     """
+    LOG.debug("Updating build %s with %s", build_id, new_fields)
     async with session.begin():
         statement = (
             update(Builds)
@@ -226,6 +239,8 @@ async def update_build_by_id(
         result = await session.execute(statement)
         result = result.scalar_one_or_none()
         if result is None:
+            await session.rollback()
+            LOG.warning("Build %s not found", build_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Build not found"
             ) from None
